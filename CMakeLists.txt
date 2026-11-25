@@ -9,6 +9,10 @@ else()
   set(nappgui_DIR "/usr/local/nappgui/cmake" CACHE PATH "NAppGUI cmake directory")
 endif()
 
+if(NOT EXISTS "${nappgui_DIR}/nappgui-config.cmake")
+  message(FATAL_ERROR "NAppGUI config not found at ${nappgui_DIR}/nappgui-config.cmake. Run ask.sh task 2 or set NAPPGUI_DIR to the SDK prefix.")
+endif()
+
 find_package(nappgui REQUIRED)
 include("${NAPPGUI_ROOT_PATH}/prj/NAppProject.cmake")
 include("${NAPPGUI_ROOT_PATH}/prj/NAppCompilers.cmake")
