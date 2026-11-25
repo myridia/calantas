@@ -24,6 +24,7 @@ struct _chat_t
     Edit *input;
     uint32_t index;
     uint32_t rendered;
+    char_t handle[128];
 };
 
 struct _account_t
@@ -31,6 +32,9 @@ struct _account_t
     App *app;
     Window *window;
     Edit *name;
+    Edit *jid;
+    Edit *password;
+    Edit *server;
     Edit *status;
     bool_t accepted;
 };
@@ -61,7 +65,6 @@ struct _app_t
     uint32_t *rows;
     uint32_t nrows;
     char_t search[128];
-    char_t account_name[64];
     bool_t show_offline;
     Backend *backend;
     Chat *chats[CAL_MAX_CHATS];
@@ -73,9 +76,70 @@ static void i_set_status(App *app, const char_t *text)
 
     cassert_no_null(app);
     label_text(app->status, text != NULL ? text : "");
-    bstd_sprintf(line, sizeof(line), "%s - %s", app->account_name,
+    bstd_sprintf(line, sizeof(line), "%s - %s", cal_backend_account_name(app->backend),
                  cal_backend_status_text(app->backend));
     label_text(app->account, line);
+}
+
+static uint32_t i_chat_index(App *app, Chat *chat)
+{
+    const CalBuddy *buddy;
+    uint32_t i;
+
+    if (chat == NULL)
+        return CAL_MAX_CHATS;
+
+    if (chat->handle[0] != '\0')
+    {
+        for (i = 0; i < cal_backend_buddy_count(app->backend); i += 1)
+        {
+            buddy = cal_backend_buddy(app->backend, i);
+            if (buddy != NULL && strcmp(buddy->handle, chat->handle) == 0)
+            {
+                chat->index = i;
+                return i;
+            }
+        }
+    }
+
+    if (chat->index < cal_backend_buddy_count(app->backend))
+        return chat->index;
+    return CAL_MAX_CHATS;
+}
+
+static Chat *i_chat_for_buddy(App *app, const uint32_t index)
+{
+    const CalBuddy *buddy = cal_backend_buddy(app->backend, index);
+    uint32_t i;
+
+    if (buddy == NULL)
+        return NULL;
+
+    for (i = 0; i < CAL_MAX_CHATS; i += 1)
+    {
+        Chat *chat = app->chats[i];
+        if (chat != NULL && strcmp(chat->handle, buddy->handle) == 0)
+            return chat;
+    }
+    return NULL;
+}
+
+static void i_remove_chat(App *app, Chat *chat)
+{
+    uint32_t i;
+
+    if (chat == NULL)
+        return;
+
+    for (i = 0; i < CAL_MAX_CHATS; i += 1)
+    {
+        if (app->chats[i] == chat)
+        {
+            window_destroy(&chat->window);
+            heap_delete(&app->chats[i], Chat);
+            return;
+        }
+    }
 }
 
 static bool_t i_contains_ci(const char_t *haystack, const char_t *needle)
@@ -163,6 +227,7 @@ static const char_t *i_status_mark(const cal_status_t status)
 static void i_apply_status(App *app, const cal_status_t status, const char_t *text)
 {
     cal_backend_set_status(app->backend, status, text);
+    cal_backend_store(app->backend);
     i_rebuild_rows(app);
     i_refresh_table(app);
     i_set_status(app, text);
@@ -224,7 +289,14 @@ static void i_OnTableData(App *app, Event *e)
 static void i_refresh_chat(Chat *chat)
 {
     uint32_t i;
-    uint32_t count = cal_backend_message_count(chat->app->backend, chat->index);
+    uint32_t index = i_chat_index(chat->app, chat);
+    uint32_t count;
+
+    if (index >= CAL_MAX_CHATS)
+        return;
+
+    chat->index = index;
+    count = cal_backend_message_count(chat->app->backend, index);
 
     for (i = chat->rendered; i < count; i += 1)
     {
@@ -241,18 +313,27 @@ static void i_refresh_chat(Chat *chat)
 static void i_OnChatSend(Chat *chat, Event *e)
 {
     const char_t *text = edit_get_text(chat->input);
+    uint32_t index = i_chat_index(chat->app, chat);
+
+    if (index >= CAL_MAX_CHATS)
+    {
+        i_set_status(chat->app, "That buddy is no longer available.");
+        unref(e);
+        return;
+    }
 
     if (text != NULL && text[0] != '\0')
     {
-        if (cal_backend_send(chat->app->backend, chat->index, text) == TRUE)
+        if (cal_backend_send(chat->app->backend, index, text) == TRUE)
         {
             edit_text(chat->input, "");
+            cal_backend_store(chat->app->backend);
             i_refresh_chat(chat);
             i_set_status(chat->app, "Message sent");
         }
         else
         {
-            i_set_status(chat->app, "That buddy is offline.");
+            i_set_status(chat->app, "Message could not be sent.");
         }
     }
 
@@ -261,11 +342,7 @@ static void i_OnChatSend(Chat *chat, Event *e)
 
 static void i_OnChatClose(Chat *chat, Event *e)
 {
-    App *app = chat->app;
-    uint32_t index = chat->index;
-
-    window_destroy(&chat->window);
-    heap_delete(&app->chats[index], Chat);
+    i_remove_chat(chat->app, chat);
     unref(e);
 }
 
@@ -292,6 +369,7 @@ static void i_open_chat(App *app, const uint32_t index)
     chat = heap_new0(Chat);
     chat->app = app;
     chat->index = index;
+    bstd_sprintf(chat->handle, sizeof(chat->handle), "%s", buddy->handle);
     chat->window = window_create(ekWINDOW_STDRES);
     chat->text = textview_create();
     chat->input = edit_create();
@@ -372,11 +450,28 @@ static void i_OnMessage(App *app, Event *e)
 static void i_OnAccountOk(Account *form, Event *e)
 {
     const char_t *name = edit_get_text(form->name);
+    const char_t *jid = edit_get_text(form->jid);
+    const char_t *password = edit_get_text(form->password);
+    const char_t *server = edit_get_text(form->server);
     const char_t *text = edit_get_text(form->status);
+    App *app = form->app;
 
-    bstd_sprintf(form->app->account_name, sizeof(form->app->account_name), "%s",
-                 name != NULL && name[0] != '\0' ? name : "Me");
-    cal_backend_set_status(form->app->backend, cal_backend_status(form->app->backend), text);
+    cal_backend_set_account_name(app->backend, name);
+    cal_backend_set_status(app->backend, cal_backend_status(app->backend), text);
+
+    if (cal_backend_kind(app->backend) == ekCAL_BACKEND_XMPP)
+    {
+        if (cal_backend_connect(app->backend, jid, password, server) == TRUE)
+            i_set_status(app, "Connecting to XMPP");
+        else
+            i_set_status(app, cal_backend_connection_text(app->backend));
+    }
+    else
+    {
+        cal_backend_store(app->backend);
+        i_set_status(app, "Account updated");
+    }
+
     form->accepted = TRUE;
     window_stop_modal(form->window, 1);
     unref(e);
@@ -391,30 +486,55 @@ static void i_OnAccountCancel(Account *form, Event *e)
 
 static void i_OnAccount(App *app, Event *e)
 {
+    bool_t xmpp = cal_backend_kind(app->backend) == ekCAL_BACKEND_XMPP;
     Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
-    Layout *layout = layout_create(2, 4);
+    Layout *layout = layout_create(2, 6);
     Layout *buttons = layout_create(2, 1);
     Label *name_label = label_create();
+    Label *jid_label = label_create();
+    Label *password_label = label_create();
+    Label *server_label = label_create();
     Label *status_label = label_create();
     Edit *name = edit_create();
+    Edit *jid = edit_create();
+    Edit *password = edit_create();
+    Edit *server = edit_create();
     Edit *status = edit_create();
     Button *ok = button_push();
     Button *cancel = button_push();
     Panel *panel = panel_create();
+    char_t title[128];
     Account form;
 
     form.app = app;
     form.window = window;
     form.name = name;
+    form.jid = jid;
+    form.password = password;
+    form.server = server;
     form.status = status;
     form.accepted = FALSE;
 
-    window_title(window, "Account");
-    label_text(name_label, "Name:");
+    bstd_sprintf(title, sizeof(title), "%s", xmpp ? "XMPP Account" : "Account");
+    window_title(window, title);
+    label_text(name_label, xmpp ? "Display name:" : "Name:");
+    label_text(jid_label, xmpp ? "JID:" : "Address:");
+    label_text(password_label, "Password:");
+    label_text(server_label, "Server:");
     label_text(status_label, "Status:");
-    edit_text(name, app->account_name);
+    edit_text(name, cal_backend_account_name(app->backend));
+    edit_text(jid, cal_backend_account_jid(app->backend));
+    edit_text(password, xmpp ? cal_backend_account_password(app->backend) : "");
+    edit_text(server, cal_backend_account_server(app->backend));
     edit_text(status, cal_backend_status_text(app->backend));
+    edit_passmode(password, TRUE);
+    edit_phtext(jid, xmpp ? "user@example.org" : "Optional address");
+    edit_phtext(password, "Saved in the local state file");
+    edit_phtext(server, "Optional server override");
     edit_width(name, 300);
+    edit_width(jid, 300);
+    edit_width(password, 300);
+    edit_width(server, 300);
     edit_width(status, 300);
 
     button_text(ok, "OK");
@@ -424,9 +544,15 @@ static void i_OnAccount(App *app, Event *e)
 
     layout_label(layout, name_label, 0, 0);
     layout_edit(layout, name, 1, 0);
-    layout_label(layout, status_label, 0, 1);
-    layout_edit(layout, status, 1, 1);
-    layout_layout(layout, buttons, 1, 3);
+    layout_label(layout, jid_label, 0, 1);
+    layout_edit(layout, jid, 1, 1);
+    layout_label(layout, password_label, 0, 2);
+    layout_edit(layout, password, 1, 2);
+    layout_label(layout, server_label, 0, 3);
+    layout_edit(layout, server, 1, 3);
+    layout_label(layout, status_label, 0, 4);
+    layout_edit(layout, status, 1, 4);
+    layout_layout(layout, buttons, 1, 5);
     layout_button(buttons, ok, 0, 0);
     layout_button(buttons, cancel, 1, 0);
     layout_hexpand(buttons, 0);
@@ -434,6 +560,9 @@ static void i_OnAccount(App *app, Event *e)
     layout_hmargin(buttons, 0, 6);
     layout_vmargin(layout, 0, 8);
     layout_vmargin(layout, 1, 8);
+    layout_vmargin(layout, 2, 8);
+    layout_vmargin(layout, 3, 8);
+    layout_vmargin(layout, 4, 8);
     layout_margin(layout, 14);
 
     panel_layout(panel, layout);
@@ -442,9 +571,6 @@ static void i_OnAccount(App *app, Event *e)
 
     window_modal(window, app->window);
     window_destroy(&window);
-
-    if (form.accepted == TRUE)
-        i_set_status(app, "Account updated");
 
     unref(e);
 }
@@ -455,6 +581,8 @@ static void i_OnBuddyOk(BuddyForm *form, Event *e)
     const char_t *handle = edit_get_text(form->handle);
 
     form->accepted = cal_backend_add_buddy(form->app->backend, name, handle);
+    if (form->accepted == TRUE)
+        cal_backend_store(form->app->backend);
     window_stop_modal(form->window, form->accepted == TRUE ? 1 : 0);
     unref(e);
 }
@@ -566,6 +694,65 @@ static void i_OnOnlineOnly(App *app, Event *e)
     unref(e);
 }
 
+static void i_set_backend(App *app, const cal_backend_kind_t kind)
+{
+    Backend *next;
+    uint32_t i;
+
+    if (cal_backend_kind(app->backend) == kind)
+        return;
+
+    cal_backend_store(app->backend);
+    for (i = 0; i < CAL_MAX_CHATS; i += 1)
+    {
+        Chat *chat = app->chats[i];
+        if (chat != NULL)
+        {
+            window_destroy(&chat->window);
+            heap_delete(&app->chats[i], Chat);
+        }
+    }
+    cal_backend_destroy(&app->backend);
+
+    next = cal_backend_create(kind);
+    cal_backend_restore(next);
+    app->backend = next;
+    i_rebuild_rows(app);
+    i_refresh_table(app);
+
+    if (kind == ekCAL_BACKEND_XMPP)
+    {
+        if (cal_backend_xmpp_available() == FALSE)
+            i_set_status(app, "XMPP unavailable; build with libstrophe");
+        else if (cal_backend_account_jid(app->backend)[0] != '\0'
+                 && cal_backend_account_password(app->backend)[0] != '\0')
+        {
+            if (cal_backend_connect(app->backend, cal_backend_account_jid(app->backend),
+                                    cal_backend_account_password(app->backend),
+                                    cal_backend_account_server(app->backend)) == TRUE)
+                i_set_status(app, "Connecting to XMPP");
+            else
+                i_set_status(app, cal_backend_connection_text(app->backend));
+        }
+        else
+            i_set_status(app, "XMPP selected; open Account to connect");
+    }
+    else
+        i_set_status(app, "Local backend selected");
+}
+
+static void i_OnLocalBackend(App *app, Event *e)
+{
+    i_set_backend(app, ekCAL_BACKEND_LOCAL);
+    unref(e);
+}
+
+static void i_OnXmppBackend(App *app, Event *e)
+{
+    i_set_backend(app, ekCAL_BACKEND_XMPP);
+    unref(e);
+}
+
 static void i_OnAboutClose(About *about, Event *e)
 {
     window_stop_modal(about->window, 1);
@@ -625,6 +812,8 @@ static void i_build_menu(App *app)
     MenuItem *show_all = menuitem_create();
     MenuItem *accounts = menuitem_create();
     Menu *accounts_sub = menu_create();
+    MenuItem *local_backend = menuitem_create();
+    MenuItem *xmpp_backend = menuitem_create();
     MenuItem *account_item = menuitem_create();
     MenuItem *status = menuitem_create();
     Menu *status_sub = menu_create();
@@ -654,8 +843,16 @@ static void i_build_menu(App *app)
     menu_add_item(menu, contacts);
 
     menuitem_text(accounts, "Accounts");
+    menuitem_text(local_backend, "Use Local Backend");
+    menuitem_text(xmpp_backend, "Use XMPP Backend");
+    menuitem_OnClick(local_backend, listener(app, i_OnLocalBackend, App));
+    menuitem_OnClick(xmpp_backend, listener(app, i_OnXmppBackend, App));
+    menuitem_enabled(xmpp_backend, cal_backend_xmpp_available());
     menuitem_text(account_item, "Account...");
     menuitem_OnClick(account_item, listener(app, i_OnAccount, App));
+    menu_add_item(accounts_sub, local_backend);
+    menu_add_item(accounts_sub, xmpp_backend);
+    menu_add_item(accounts_sub, menuitem_separator());
     menu_add_item(accounts_sub, account_item);
 
     menuitem_text(status, "Status");
@@ -723,9 +920,9 @@ App *calantas_create(void)
     Label *filter_label = label_create();
     Panel *panel;
 
-    app->backend = cal_backend_create();
+    app->backend = cal_backend_create(ekCAL_BACKEND_LOCAL);
     app->show_offline = TRUE;
-    bstd_sprintf(app->account_name, sizeof(app->account_name), "%s", "Me");
+    cal_backend_restore(app->backend);
 
     app->window = window_create(ekWINDOW_STDRES);
     app->table = tableview_create();
@@ -833,6 +1030,7 @@ void calantas_destroy(App **app)
         free((*app)->rows);
 
     window_destroy(&(*app)->window);
+    cal_backend_store((*app)->backend);
     cal_backend_destroy(&(*app)->backend);
     heap_delete(app, App);
 }
@@ -843,11 +1041,18 @@ void calantas_update(App *app, const real64_t prtime, const real64_t ctime)
 
     while (cal_backend_poll(app->backend, &event) == TRUE)
     {
+        Chat *chat = i_chat_for_buddy(app, event.buddy);
+
         i_rebuild_rows(app);
         i_refresh_table(app);
-        if (event.buddy < CAL_MAX_CHATS && app->chats[event.buddy] != NULL)
-            i_refresh_chat(app->chats[event.buddy]);
-        i_set_status(app, "Message received");
+        if (chat != NULL)
+            i_refresh_chat(chat);
+        cal_backend_store(app->backend);
+
+        if (event.text[0] != '\0')
+            i_set_status(app, event.text);
+        else if (event.type == ekCAL_EVENT_MESSAGE)
+            i_set_status(app, "Message received");
     }
 
     unref(prtime);

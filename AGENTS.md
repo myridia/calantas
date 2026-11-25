@@ -18,16 +18,17 @@ The user builds and runs:
 ./run.sh
 ```
 
-`build.sh` configures CMake, builds Release and launches `build/Release/bin/calantas`. NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows; `NAPPGUI_DIR` overrides the SDK prefix. CMake also defaults `nappgui_DIR` to `<prefix>/cmake`. Setup scripts clone NAppGUI source into `~/.cache/calantas/nappgui_src`, not into the repository.
+`build.sh` configures CMake, builds Release and launches `build/Release/bin/calantas`. NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows; `NAPPGUI_DIR` overrides the SDK prefix. CMake also defaults `nappgui_DIR` to `<prefix>/cmake`. Setup scripts clone NAppGUI source into `~/.cache/calantas/nappgui_src`, not into the repository. The XMPP backend is built only when libstrophe is detected; set `-DCALANTAS_ENABLE_XMPP=OFF` to disable detection.
 
 ## Structure
 - `src/main.c` — `osmain_sync` entry point and 0.25s ticker
 - `src/gui.c` / `src/gui.h` — buddy list, conversation windows, menus and dialogs
-- `src/backend.c` / `src/backend.h` — account/buddy/message model and mock/local backend
+- `src/backend.c` / `src/backend.h` — account/buddy/message model, mock/local backend and text state persistence
+- `src/xmpp.c` / `src/xmpp.h` — optional libstrophe backend with worker thread and event queue
 - `src/res/` — icons
 - `CMakeLists.txt` — NAppGUI package lookup and project setup
 - `src/CMakeLists.txt` — `nap_desktop_app`
-- `ask.sh` / `ask.d/` — install/build/run tasks with built-in fallbacks when `ask.d/` is missing
+- `ask.sh` / `ask.d/` — install/build/run/clean tasks with built-in fallbacks when `ask.d/` is missing; task 6 cleans `build/` and `dist/`; task 7 installs XMPP libraries; task 8 installs NAppGUI plus all XMPP, Telegram and ActivityPub dependencies
 - `build.sh` / `run.sh` — direct build and launch, including macOS `.app` bundles
 - `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution and Linux, macOS and Windows jobs
 - `.github/workflows/linux.yml` — Linux build and release with optional `tag`
@@ -39,9 +40,11 @@ The user builds and runs:
 ## Architecture
 - The GUI depends only on `backend.h`.
 - The mock backend supplies buddies, presence, sent messages and local replies.
+- The optional XMPP backend uses libstrophe on a worker thread; it handles TLS/SASL login, roster, presence and direct messages, and pushes events to the GUI thread.
+- `cal_backend_store()` / `cal_backend_restore()` keep account name, status, JID, password, server, buddies and recent messages in `state.txt` for local and `state-xmpp.txt` for XMPP under the user config directory. Passwords are stored in plain text with user-only permissions on Unix.
 - `calantas_update()` polls backend events on the NAppGUI ticker.
-- Conversation windows are one per buddy, created on demand.
-- Planned backends: XMPP with libstrophe, IRC, Telegram with TDLib, ActivityPub via Mastodon API, then raw ActivityPub.
+- Conversation windows are one per buddy, created on demand; they track the buddy handle so roster reordering does not retarget them.
+- Planned backends: IRC, Telegram with TDLib, ActivityPub via Mastodon API, then raw ActivityPub.
 - No libpurple3 adapter.
 
 ## Conventions

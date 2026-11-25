@@ -7,6 +7,12 @@
 #define CALANTAS_MAX_MESSAGES 128
 #define CALANTAS_MAX_BUDDIES 64
 
+typedef enum _cal_backend_kind_t
+{
+    ekCAL_BACKEND_LOCAL = 0,
+    ekCAL_BACKEND_XMPP
+} cal_backend_kind_t;
+
 typedef enum _cal_status_t
 {
     ekCAL_AVAILABLE = 0,
@@ -14,6 +20,13 @@ typedef enum _cal_status_t
     ekCAL_BUSY,
     ekCAL_OFFLINE
 } cal_status_t;
+
+typedef enum _cal_event_type_t
+{
+    ekCAL_EVENT_MESSAGE = 0,
+    ekCAL_EVENT_CONTACTS,
+    ekCAL_EVENT_CONNECTION
+} cal_event_type_t;
 
 typedef struct _cal_message_t
 {
@@ -35,13 +48,20 @@ typedef struct _cal_buddy_t
 
 typedef struct _cal_event_t
 {
+    cal_event_type_t type;
     uint32_t buddy;
+    char_t text[256];
 } CalEvent;
 
 typedef struct _backend_t Backend;
 
-Backend *cal_backend_create(void);
+Backend *cal_backend_create(const cal_backend_kind_t kind);
 void cal_backend_destroy(Backend **backend);
+cal_backend_kind_t cal_backend_kind(const Backend *backend);
+bool_t cal_backend_xmpp_available(void);
+bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *password, const char_t *server);
+bool_t cal_backend_is_connected(const Backend *backend);
+const char_t *cal_backend_connection_text(const Backend *backend);
 uint32_t cal_backend_buddy_count(const Backend *backend);
 const CalBuddy *cal_backend_buddy(const Backend *backend, uint32_t index);
 bool_t cal_backend_add_buddy(Backend *backend, const char_t *name, const char_t *handle);
@@ -51,6 +71,13 @@ const CalMessage *cal_backend_message(const Backend *backend, uint32_t buddy, ui
 bool_t cal_backend_set_status(Backend *backend, cal_status_t status, const char_t *text);
 cal_status_t cal_backend_status(const Backend *backend);
 const char_t *cal_backend_status_text(const Backend *backend);
+bool_t cal_backend_set_account_name(Backend *backend, const char_t *name);
+const char_t *cal_backend_account_name(const Backend *backend);
+const char_t *cal_backend_account_jid(const Backend *backend);
+const char_t *cal_backend_account_server(const Backend *backend);
+const char_t *cal_backend_account_password(const Backend *backend);
+bool_t cal_backend_store(const Backend *backend);
+bool_t cal_backend_restore(Backend *backend);
 bool_t cal_backend_poll(Backend *backend, CalEvent *event);
 
 #endif

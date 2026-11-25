@@ -12,14 +12,21 @@ esac
 
 if [ "$(uname)" = "Darwin" ]; then
   OPENSSL_ARG=""
+  LIBSTROPHE_ARG=""
   if command -v brew >/dev/null 2>&1; then
     OPENSSL_ROOT=$(brew --prefix openssl@3 2>/dev/null || true)
     if [ -n "$OPENSSL_ROOT" ]; then
       OPENSSL_ARG="-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT"
     fi
+    LIBSTROPHE_PREFIX=$(brew --prefix libstrophe 2>/dev/null || true)
+    if [ -n "$LIBSTROPHE_PREFIX" ]; then
+      LIBSTROPHE_ARG="-DCMAKE_PREFIX_PATH=$LIBSTROPHE_PREFIX"
+      PKG_CONFIG_PATH="$LIBSTROPHE_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+      export PKG_CONFIG_PATH
+    fi
   fi
 
-  cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX="$NAPPGUI_PREFIX" -Dnappgui_DIR="$NAPPGUI_PREFIX/cmake" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG
+  cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX="$NAPPGUI_PREFIX" -Dnappgui_DIR="$NAPPGUI_PREFIX/cmake" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG $LIBSTROPHE_ARG
   cmake --build build --config Release
 else
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$NAPPGUI_PREFIX" -Dnappgui_DIR="$NAPPGUI_PREFIX/cmake"
