@@ -47,15 +47,30 @@ NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on W
 
 The XMPP backend is optional. CMake detects libstrophe through `pkg-config` or a normal library search. Without it, Calantas still builds and the XMPP menu item is disabled.
 
+Run task **7** in `./ask.sh` to install only the XMPP dependencies, or task **8** to install everything Calantas needs. Task 8 installs NAppGUI plus libstrophe, TDLib, libcurl, cJSON, OpenSSL, Expat, zlib, pkg-config and the build tools for the current platform. IRC needs no extra library.
+
+Manual equivalents:
+
 ```bash
 # Debian/Ubuntu
-sudo apt install libstrophe-dev pkg-config
+sudo apt install build-essential git cmake pkg-config libgtk-3-dev mesa-common-dev libglu1-mesa-dev libstrophe-dev libssl-dev libexpat1-dev zlib1g-dev libcurl4-openssl-dev libcjson-dev gperf
+
+# Fedora
+sudo dnf install gcc gcc-c++ git cmake pkgconf-pkg-config gtk3-devel mesa-libGL-devel mesa-libGLU-devel libstrophe-devel openssl-devel expat-devel zlib-devel libcurl-devel cjson-devel gperf
 
 # macOS
-brew install libstrophe pkg-config
+brew install cmake git pkg-config openssl@3 expat libstrophe curl cjson tdlib
 ```
 
-On Windows, install libstrophe with vcpkg and pass its toolchain to CMake. Use `-DCALANTAS_ENABLE_XMPP=OFF` to force the local-only build.
+Ubuntu and Debian do not ship TDLib as a normal development package, so task 8 builds TDLib from source into `~/.cache/calantas/tdlib_src` and installs `libtdjson` when it is not already available.
+
+On Windows, install the vcpkg packages:
+
+```text
+vcpkg install libstrophe:x64-windows openssl:x64-windows expat:x64-windows zlib:x64-windows curl:x64-windows cjson:x64-windows tdlib:x64-windows
+```
+
+Then pass `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`. Use `-DCALANTAS_ENABLE_XMPP=OFF` to force the local-only build. If libstrophe is missing but you want configuration to fail instead of disabling XMPP, pass `-DCALANTAS_REQUIRE_XMPP=ON`.
 
 ## Interface
 
@@ -82,7 +97,7 @@ On Windows, install libstrophe with vcpkg and pass its toolchain to CMake. Use `
 - `src/CMakeLists.txt` — desktop app target
 - `build.sh` — configure, build and run
 - `run.sh` — run an existing build
-- `ask.sh` / `ask.d/` — task runner
+- `ask.sh` / `ask.d/` — task runner; task 8 installs the full SDK and backend dependency set
 - `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution
 - `.github/workflows/{linux,mac,windows}.yml` — reusable platform build and release workflows with optional `tag`
 - `plan.md` — saved implementation plan and roadmap

@@ -32,6 +32,7 @@ Implemented:
 - macOS build support in `build.sh` and `run.sh`, including `.app` bundles.
 - Local persistence of account name, own status, buddies and recent messages in text state files under the user config directory.
 - Optional XMPP backend with libstrophe: TLS/SASL login, roster, presence, direct messages, worker thread and event queue.
+- Setup task for the full SDK/backend dependency set, including TDLib and the HTTP/JSON libraries needed later.
 
 Verified by the user:
 
@@ -131,7 +132,7 @@ Rules:
 ./run.sh
 ```
 
-`ask.sh` task 6 cleans `build/` and `dist/` without removing the saved state file.
+`ask.sh` task 6 cleans `build/` and `dist/` without removing the saved state file. Task 7 installs libstrophe and its OpenSSL, Expat, zlib and pkg-config dependencies for the XMPP backend. Task 8 installs NAppGUI plus the full dependency set: XMPP/libstrophe, Telegram/TDLib, ActivityPub/libcurl and cJSON, OpenSSL, Expat, zlib, pkg-config and build tools. IRC needs no extra library.
 
 Binary:
 

@@ -28,7 +28,7 @@ The user builds and runs:
 - `src/res/` — icons
 - `CMakeLists.txt` — NAppGUI package lookup and project setup
 - `src/CMakeLists.txt` — `nap_desktop_app`
-- `ask.sh` / `ask.d/` — install/build/run/clean tasks with built-in fallbacks when `ask.d/` is missing; task 6 cleans `build/` and `dist/`
+- `ask.sh` / `ask.d/` — install/build/run/clean tasks with built-in fallbacks when `ask.d/` is missing; task 6 cleans `build/` and `dist/`; task 7 installs XMPP libraries; task 8 installs NAppGUI plus all XMPP, Telegram and ActivityPub dependencies
 - `build.sh` / `run.sh` — direct build and launch, including macOS `.app` bundles
 - `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution and Linux, macOS and Windows jobs
 - `.github/workflows/linux.yml` — Linux build and release with optional `tag`
