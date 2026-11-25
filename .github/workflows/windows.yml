@@ -1,0 +1,42 @@
+name: Windows
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+  packages: none
+
+jobs:
+  build:
+    if: github.repository_owner == 'myridia'
+    runs-on: windows-latest
+    steps:
+      - name: Nappgui
+        run: |
+          git clone --depth 1 https://github.com/frang75/nappgui_src.git
+          cd nappgui_src
+          cmake -S . -B build -DNAPPGUI_DEMO=NO
+          cmake --build build --config Release -j 4
+          cmake --install build --config Release --prefix C:/nappgui
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_INSTALL_PREFIX=C:/nappgui
+          cmake --build build --config Release
+          dir build/Release/bin
+
+      - name: Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: 'build/Release/bin/calantas.exe'
+          tag: ${{ github.ref }}
+          overwrite: true
+          file_glob: true
