@@ -12,6 +12,8 @@ show_menu() {
   printf "%s\n" '  │  3  │ Install NAppGUI - Linux (/usr/local/nappgui) │'
   printf "%s\n" '  │  4  │ Build & run app (./build.sh)                 │'
   printf "%s\n" '  │  5  │ Run app (./run.sh)                           │'
+  printf "%s\n" '  │  6  │ Clean build files (build/, dist/)            │'
+  printf "%s\n" '  │  7  │ Install libstrophe + XMPP dependencies       │'
   printf "%s\n" '  │  0  │ Exit                                         │'
   printf "%s\n" '  └─────┴──────────────────────────────────────────────┘'
 }
@@ -128,6 +130,12 @@ i_build_app() {
   i_launch_app
 }
 
+i_clean_build() {
+  cd "$ROOT" || return 1
+  rm -rf build dist
+  printf "  Build files removed.\n"
+}
+
 run_task() {
   id="$1"
   script="$2"
@@ -148,6 +156,7 @@ run_task() {
     3) i_install_nappgui_linux ;;
     4) i_build_app ;;
     5) i_launch_app ;;
+    6) i_clean_build ;;
     *)
       printf "  Missing task script: ask.d/%s\n" "$script"
       return 1
@@ -181,6 +190,9 @@ while true; do
   elif [ "$task" = "5" ]; then
     printf "  ...running the app\n"
     run_task 5 run.sh
+  elif [ "$task" = "6" ]; then
+    printf "  ...cleaning build files\n"
+    run_task 6 clean.sh
   else
     printf "  Unknown task: %s\n" "$task"
   fi

@@ -30,7 +30,8 @@ Implemented:
 - README logo, `AGENTS.md`, build scripts, `ask.sh` and project-map entry.
 - `ask.sh` fallbacks for missing `ask.d/` scripts.
 - macOS build support in `build.sh` and `run.sh`, including `.app` bundles.
-- Local persistence of account name, own status, buddies and recent messages in a text state file under the user config directory.
+- Local persistence of account name, own status, buddies and recent messages in text state files under the user config directory.
+- Optional XMPP backend with libstrophe: TLS/SASL login, roster, presence, direct messages, worker thread and event queue.
 
 Verified by the user:
 
@@ -49,8 +50,10 @@ Not verified yet:
 ```text
 src/main.c       osmain_sync entry point
 src/gui.c        NAppGUI windows, buddy list, conversations, dialogs, menus
-src/backend.c    messenger model and mock/local backend
+src/backend.c    messenger model, mock/local backend and state files
 src/backend.h    only interface the GUI is allowed to use
+src/xmpp.c       optional libstrophe worker thread and event queue
+src/xmpp.h       private interface between backend.c and the XMPP backend
 ```
 
 Rules:
@@ -71,15 +74,15 @@ Rules:
 
 3. Add local persistence. Done.
    - Account name, own status, buddies and recent messages are saved as text.
-   - State file: `~/.config/calantas/state.txt` on Linux/macOS, `%APPDATA%\Calantas\state.txt` on Windows.
+   - State files: `state.txt` for local and `state-xmpp.txt` for XMPP under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows.
 
-4. Add XMPP core with libstrophe.
-   - JID/password account.
-   - TLS/SASL login.
-   - Roster.
-   - Presence/status.
+4. Add XMPP core with libstrophe. Implemented, not verified by the user yet.
+   - JID/password account in the Account dialog.
+   - TLS/SASL login through libstrophe.
+   - Roster, presence and own status.
    - Direct messages.
    - Worker thread plus event queue.
+   - Optional build: the app builds without libstrophe and disables the XMPP menu item.
 
 5. Add IRC.
    - Server/nick/channel account model.
@@ -128,13 +131,15 @@ Rules:
 ./run.sh
 ```
 
+`ask.sh` task 6 cleans `build/` and `dist/` without removing the saved state file.
+
 Binary:
 
 ```text
 build/Release/bin/calantas
 ```
 
-CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix. Setup scripts clone the NAppGUI source into `~/.cache/calantas/nappgui_src` so the repository stays clean.
+CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix. Setup scripts clone the NAppGUI source into `~/.cache/calantas/nappgui_src` so the repository stays clean. The XMPP backend is enabled only when libstrophe is found; use `-DCALANTAS_ENABLE_XMPP=OFF` to force a local-only build.
 
 ## Workflow files
 
