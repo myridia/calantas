@@ -116,7 +116,7 @@ The GUI talks only to `backend.h`, so real protocols can be added without changi
 | ActivityPub via Mastodon API | Planned |
 | Raw ActivityPub | Planned later |
 
-To use XMPP, choose **Accounts → Use XMPP Backend**, then **Accounts → Account...** and enter the JID and password. The password is not saved; the JID, optional server override, roster and recent messages are kept in `state-xmpp.txt`.
+To use XMPP, choose **Accounts → Use XMPP Backend**, then **Accounts → Account...** and enter the JID and password. The JID, password, optional server override, roster and recent messages are kept in `state-xmpp.txt`. The password is stored in plain text with user-only file permissions on Linux/macOS; it is not encrypted. When a saved JID and password exist, selecting the XMPP backend connects automatically.
 
 There is no libpurple3 adapter and no plan to add one.
 

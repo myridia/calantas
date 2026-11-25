@@ -524,12 +524,12 @@ static void i_OnAccount(App *app, Event *e)
     label_text(status_label, "Status:");
     edit_text(name, cal_backend_account_name(app->backend));
     edit_text(jid, cal_backend_account_jid(app->backend));
-    edit_text(password, "");
+    edit_text(password, xmpp ? cal_backend_account_password(app->backend) : "");
     edit_text(server, cal_backend_account_server(app->backend));
     edit_text(status, cal_backend_status_text(app->backend));
     edit_passmode(password, TRUE);
     edit_phtext(jid, xmpp ? "user@example.org" : "Optional address");
-    edit_phtext(password, "Not saved between runs");
+    edit_phtext(password, "Saved in the local state file");
     edit_phtext(server, "Optional server override");
     edit_width(name, 300);
     edit_width(jid, 300);
@@ -721,9 +721,22 @@ static void i_set_backend(App *app, const cal_backend_kind_t kind)
     i_refresh_table(app);
 
     if (kind == ekCAL_BACKEND_XMPP)
-        i_set_status(app, cal_backend_xmpp_available() == TRUE
-                              ? "XMPP selected; open Account to connect"
-                              : "XMPP unavailable; build with libstrophe");
+    {
+        if (cal_backend_xmpp_available() == FALSE)
+            i_set_status(app, "XMPP unavailable; build with libstrophe");
+        else if (cal_backend_account_jid(app->backend)[0] != '\0'
+                 && cal_backend_account_password(app->backend)[0] != '\0')
+        {
+            if (cal_backend_connect(app->backend, cal_backend_account_jid(app->backend),
+                                    cal_backend_account_password(app->backend),
+                                    cal_backend_account_server(app->backend)) == TRUE)
+                i_set_status(app, "Connecting to XMPP");
+            else
+                i_set_status(app, cal_backend_connection_text(app->backend));
+        }
+        else
+            i_set_status(app, "XMPP selected; open Account to connect");
+    }
     else
         i_set_status(app, "Local backend selected");
 }

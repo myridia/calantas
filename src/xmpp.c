@@ -359,7 +359,7 @@ static void i_conn_handler(xmpp_conn_t *conn, xmpp_conn_event_t event,
     }
 }
 
-static void i_iq_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata)
+static int i_iq_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata)
 {
     XmppBackend *backend = (XmppBackend *)userdata;
     const char_t *type = xmpp_stanza_get_type(stanza);
@@ -370,15 +370,15 @@ static void i_iq_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdat
     unref(conn);
 
     if (type != NULL && strcmp(type, "error") == 0)
-        return;
+        return 1;
 
     query = xmpp_stanza_get_child_by_name(stanza, "query");
     if (query == NULL)
-        return;
+        return 1;
 
     xmlns = xmpp_stanza_get_attribute(query, "xmlns");
     if (xmlns == NULL || strcmp(xmlns, XMPP_NS_ROSTER) != 0)
-        return;
+        return 1;
 
     for (item = xmpp_stanza_get_children(query); item != NULL; item = xmpp_stanza_get_next(item))
     {
@@ -399,9 +399,11 @@ static void i_iq_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdat
         bstd_sprintf(event.jid, sizeof(event.jid), "%s", jid);
         i_push_event(backend, &event);
     }
+
+    return 1;
 }
 
-static void i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata)
+static int i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata)
 {
     XmppBackend *backend = (XmppBackend *)userdata;
     xmpp_ctx_t *ctx = xmpp_conn_get_context(conn);
@@ -412,15 +414,15 @@ static void i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *us
     CalXmppEvent event;
 
     if (from == NULL)
-        return;
+        return 1;
 
     body = xmpp_stanza_get_child_by_name(stanza, "body");
     if (body == NULL)
-        return;
+        return 1;
 
     text = xmpp_stanza_get_text_ptr(body);
     if (text == NULL || text[0] == '\0')
-        return;
+        return 1;
 
     bare = xmpp_jid_bare(ctx, from);
     memset(&event, 0, sizeof(event));
@@ -430,6 +432,8 @@ static void i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *us
     i_push_event(backend, &event);
     if (bare != NULL)
         xmpp_free(ctx, bare);
+
+    return 1;
 }
 
 static cal_status_t i_presence_status(xmpp_stanza_t *stanza)
@@ -455,7 +459,7 @@ static cal_status_t i_presence_status(xmpp_stanza_t *stanza)
     return ekCAL_AVAILABLE;
 }
 
-static void i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata)
+static int i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata)
 {
     XmppBackend *backend = (XmppBackend *)userdata;
     xmpp_ctx_t *ctx = xmpp_conn_get_context(conn);
@@ -468,7 +472,7 @@ static void i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *u
     CalXmppEvent event;
 
     if (from == NULL)
-        return;
+        return 1;
 
     bmutex_lock(backend->mutex);
     bstd_sprintf(own_jid, sizeof(own_jid), "%s", backend->jid);
@@ -482,7 +486,7 @@ static void i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *u
             xmpp_free(ctx, own_bare);
         if (bare != NULL)
             xmpp_free(ctx, bare);
-        return;
+        return 1;
     }
 
     memset(&event, 0, sizeof(event));
@@ -499,6 +503,8 @@ static void i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *u
         xmpp_free(ctx, own_bare);
     if (bare != NULL)
         xmpp_free(ctx, bare);
+
+    return 1;
 }
 
 static uint32_t i_thread_main(void *data)

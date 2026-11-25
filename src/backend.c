@@ -40,6 +40,7 @@ struct _backend_t
     char_t account_name[64];
     char_t jid[128];
     char_t server[128];
+    char_t password[128];
     char_t connection_text[256];
     cal_backend_kind_t kind;
     XmppBackend *xmpp;
@@ -411,6 +412,8 @@ bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *pa
     bstd_sprintf(backend->jid, sizeof(backend->jid), "%s", jid);
     bstd_sprintf(backend->server, sizeof(backend->server), "%s",
                  server != NULL ? server : "");
+    bstd_sprintf(backend->password, sizeof(backend->password), "%s",
+                 password != NULL ? password : "");
 
     if (backend->kind == ekCAL_BACKEND_XMPP)
     {
@@ -585,6 +588,11 @@ const char_t *cal_backend_account_server(const Backend *backend)
     return backend != NULL ? backend->server : "";
 }
 
+const char_t *cal_backend_account_password(const Backend *backend)
+{
+    return backend != NULL ? backend->password : "";
+}
+
 bool_t cal_backend_poll(Backend *backend, CalEvent *event)
 {
     uint32_t i;
@@ -634,6 +642,7 @@ bool_t cal_backend_store(const Backend *backend)
     i_write_string(file, "A|", backend->account_name);
     i_write_string(file, "J|", backend->jid);
     i_write_string(file, "R|", backend->server);
+    i_write_string(file, "P|", backend->password);
     fprintf(file, "S|%u|", (unsigned)backend->status);
     i_write_escaped(file, backend->status_text);
     fputs("|\n", file);
@@ -707,6 +716,10 @@ bool_t cal_backend_restore(Backend *backend)
         else if (strcmp(fields[0], "R") == 0 && nfields >= 3)
         {
             bstd_sprintf(backend->server, sizeof(backend->server), "%s", fields[1]);
+        }
+        else if (strcmp(fields[0], "P") == 0 && nfields >= 3)
+        {
+            bstd_sprintf(backend->password, sizeof(backend->password), "%s", fields[1]);
         }
         else if (strcmp(fields[0], "S") == 0 && nfields >= 4)
         {

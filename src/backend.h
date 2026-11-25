@@ -75,6 +75,7 @@ bool_t cal_backend_set_account_name(Backend *backend, const char_t *name);
 const char_t *cal_backend_account_name(const Backend *backend);
 const char_t *cal_backend_account_jid(const Backend *backend);
 const char_t *cal_backend_account_server(const Backend *backend);
+const char_t *cal_backend_account_password(const Backend *backend);
 bool_t cal_backend_store(const Backend *backend);
 bool_t cal_backend_restore(Backend *backend);
 bool_t cal_backend_poll(Backend *backend, CalEvent *event);

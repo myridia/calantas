@@ -32,6 +32,7 @@ Implemented:
 - macOS build support in `build.sh` and `run.sh`, including `.app` bundles.
 - Local persistence of account name, own status, buddies and recent messages in text state files under the user config directory.
 - Optional XMPP backend with libstrophe: TLS/SASL login, roster, presence, direct messages, worker thread and event queue.
+- Saved XMPP JID and password with automatic connect when the XMPP backend is selected.
 - Setup task for the full SDK/backend dependency set, including TDLib and the HTTP/JSON libraries needed later.
 
 Verified by the user:
@@ -75,7 +76,7 @@ Rules:
 
 3. Add local persistence. Done.
    - Account name, own status, buddies and recent messages are saved as text.
-   - State files: `state.txt` for local and `state-xmpp.txt` for XMPP under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows.
+   - State files: `state.txt` for local and `state-xmpp.txt` for XMPP under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows. The XMPP password is stored there in plain text with user-only permissions on Unix.
 
 4. Add XMPP core with libstrophe. Implemented, not verified by the user yet.
    - JID/password account in the Account dialog.

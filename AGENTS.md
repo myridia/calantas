@@ -41,7 +41,7 @@ The user builds and runs:
 - The GUI depends only on `backend.h`.
 - The mock backend supplies buddies, presence, sent messages and local replies.
 - The optional XMPP backend uses libstrophe on a worker thread; it handles TLS/SASL login, roster, presence and direct messages, and pushes events to the GUI thread.
-- `cal_backend_store()` / `cal_backend_restore()` keep account name, status, buddies and recent messages in `state.txt` for local and `state-xmpp.txt` for XMPP under the user config directory.
+- `cal_backend_store()` / `cal_backend_restore()` keep account name, status, JID, password, server, buddies and recent messages in `state.txt` for local and `state-xmpp.txt` for XMPP under the user config directory. Passwords are stored in plain text with user-only permissions on Unix.
 - `calantas_update()` polls backend events on the NAppGUI ticker.
 - Conversation windows are one per buddy, created on demand; they track the buddy handle so roster reordering does not retarget them.
 - Planned backends: IRC, Telegram with TDLib, ActivityPub via Mastodon API, then raw ActivityPub.
