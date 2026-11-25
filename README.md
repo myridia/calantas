@@ -35,6 +35,8 @@ Run an existing build:
 
 The binary is written to `build/Release/bin/calantas`.
 
+NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows. Override the SDK location with `NAPPGUI_DIR=/path/to/nappgui`.
+
 ## Interface
 
 - Buddy list with status, name, address and status text

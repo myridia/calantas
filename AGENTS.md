@@ -18,7 +18,7 @@ The user builds and runs:
 ./run.sh
 ```
 
-`build.sh` configures CMake, builds Release and launches `build/Release/bin/calantas`.
+`build.sh` configures CMake, builds Release and launches `build/Release/bin/calantas`. NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows; `NAPPGUI_DIR` overrides the SDK prefix. CMake also defaults `nappgui_DIR` to `<prefix>/cmake`.
 
 ## Structure
 - `src/main.c` — `osmain_sync` entry point and 0.25s ticker

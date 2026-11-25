@@ -1,5 +1,14 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 project(calantas)
+
+if(DEFINED ENV{NAPPGUI_DIR})
+  set(nappgui_DIR "$ENV{NAPPGUI_DIR}/cmake" CACHE PATH "NAppGUI cmake directory")
+elseif(WIN32)
+  set(nappgui_DIR "C:/nappgui/cmake" CACHE PATH "NAppGUI cmake directory")
+else()
+  set(nappgui_DIR "/usr/local/nappgui/cmake" CACHE PATH "NAppGUI cmake directory")
+endif()
+
 find_package(nappgui REQUIRED)
 include("${NAPPGUI_ROOT_PATH}/prj/NAppProject.cmake")
 include("${NAPPGUI_ROOT_PATH}/prj/NAppCompilers.cmake")

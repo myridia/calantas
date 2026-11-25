@@ -44,7 +44,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui -Dnappgui_DIR=/usr/local/nappgui/cmake
           cmake --build build
 
       - name: Resolve release tag

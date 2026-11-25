@@ -137,6 +137,8 @@ Binary:
 build/Release/bin/calantas
 ```
 
+CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix.
+
 ## Workflow files
 
 ```text

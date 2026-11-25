@@ -4,6 +4,12 @@ set -e
 cd "$(dirname "$0")"
 rm -rf build dist
 
+case "$(uname)" in
+  Darwin) NAPPGUI_PREFIX="${NAPPGUI_DIR:-/usr/local/nappgui}" ;;
+  MINGW*|MSYS*|CYGWIN*) NAPPGUI_PREFIX="${NAPPGUI_DIR:-C:/nappgui}" ;;
+  *) NAPPGUI_PREFIX="${NAPPGUI_DIR:-/usr/local/nappgui}" ;;
+esac
+
 if [ "$(uname)" = "Darwin" ]; then
   OPENSSL_ARG=""
   if command -v brew >/dev/null 2>&1; then
@@ -13,10 +19,10 @@ if [ "$(uname)" = "Darwin" ]; then
     fi
   fi
 
-  cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG
+  cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX="$NAPPGUI_PREFIX" -Dnappgui_DIR="$NAPPGUI_PREFIX/cmake" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG
   cmake --build build --config Release
 else
-  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$NAPPGUI_PREFIX" -Dnappgui_DIR="$NAPPGUI_PREFIX/cmake"
   cmake --build build
 fi
 
