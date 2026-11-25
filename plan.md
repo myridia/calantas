@@ -146,7 +146,7 @@ build/Release/bin/calantas
 .github/workflows/windows.yml
 ```
 
-`control.yml` is the single entry point. Leaf workflows are reusable with `workflow_call` and can also be dispatched directly.
+`control.yml` is the single entry point and follows the mcclim settings: it accepts an optional `tag` input, uses the pushed tag when present, and falls back to `v0.1.0`. Leaf workflows are reusable with `workflow_call`, accept an optional `tag`, skip release when no tag resolves, and can also be dispatched directly.
 
 ## Agent rules for this project
 

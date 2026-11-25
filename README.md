@@ -57,8 +57,8 @@ The binary is written to `build/Release/bin/calantas`.
 - `build.sh` — configure, build and run
 - `run.sh` — run an existing build
 - `ask.sh` / `ask.d/` — task runner
-- `.github/workflows/control.yml` — single CI entry point
-- `.github/workflows/{linux,mac,windows}.yml` — platform build and release workflows
+- `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution
+- `.github/workflows/{linux,mac,windows}.yml` — reusable platform build and release workflows with optional `tag`
 - `plan.md` — saved implementation plan and roadmap
 - `calantas.svg` — project logo
 

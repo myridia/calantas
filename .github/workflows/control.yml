@@ -6,35 +6,39 @@ on:
       - '*'
   workflow_dispatch:
     inputs:
-      target:
-        description: "What to build"
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - linux
-          - mac
-          - windows
+      tag:
+        description: 'Release tag to upload to (leave empty to use the default tag)'
+        required: false
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
   issues: read
   packages: none
+  pages: write
+  id-token: write
 
 jobs:
-  linux:
-    if: github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'linux'
-    uses: ./.github/workflows/linux.yml
-    secrets: inherit
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - id: resolve
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$tag" ]; then
+            tag='v0.1.0'
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-  mac:
-    if: github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'mac'
-    uses: ./.github/workflows/mac.yml
-    secrets: inherit
-
-  windows:
-    if: github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'windows'
-    uses: ./.github/workflows/windows.yml
-    secrets: inherit
+  #linux:   { if: "github.repository_owner == 'myridia'", needs: tag, uses: ./.github/workflows/linux.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
+  #mac:     { if: "github.repository_owner == 'myridia'", needs: tag, uses: ./.github/workflows/mac.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
+  windows: { if: "github.repository_owner == 'myridia'", needs: tag, uses: ./.github/workflows/windows.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }

@@ -1,8 +1,17 @@
 name: Mac
-
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (leave empty to skip release)'
+        required: false
+        type: string
   workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag from caller (leave empty to use pushed tag)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -15,12 +24,15 @@ jobs:
     if: github.repository_owner == 'myridia'
     runs-on: macos-15
     steps:
+      - name: Dependencies
+        run: brew install openssl@3
+
       - name: Nappgui
         run: |
           git clone --depth 1 https://github.com/frang75/nappgui_src.git
           cd nappgui_src
           cmake --version
-          cmake -G Xcode -S . -B build -DNAPPGUI_DEMO=NO -DDEPLOYMENT_TARGET_OSX=14.0
+          cmake -G Xcode -S . -B build -DNAPPGUI_DEMO=NO -DDEPLOYMENT_TARGET_OSX=14.0 -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
           cmake --build build --config Release -j 4
           sudo cmake --install build --config Release --prefix /usr/local/nappgui
 
@@ -29,18 +41,37 @@ jobs:
 
       - name: Build
         run: |
-          cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0
+          cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0 -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
           cmake --build build --config Release
           ls build/Release/bin/
           ls build/Release/bin/calantas.app
           cd build/Release/bin/
           hdiutil create -volname "calantas" -srcfolder "calantas.app" -ov -format UDZO "calantas-arm64.dmg"
 
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$tag" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "No release tag (not a tag push and no tag input); skipping release"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Release
+        if: steps.release.outputs.publish == 'true'
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: 'build/Release/bin/calantas-arm64.dmg'
-          tag: ${{ github.ref }}
+          tag: ${{ steps.release.outputs.tag }}
           overwrite: true
           file_glob: true

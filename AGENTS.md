@@ -29,10 +29,10 @@ The user builds and runs:
 - `src/CMakeLists.txt` — `nap_desktop_app`
 - `ask.sh` / `ask.d/` — install/build/run tasks with built-in fallbacks when `ask.d/` is missing
 - `build.sh` / `run.sh` — direct build and launch, including macOS `.app` bundles
-- `.github/workflows/control.yml` — single CI entry point with Linux, macOS and Windows jobs
-- `.github/workflows/linux.yml` — Linux build and release
-- `.github/workflows/mac.yml` — macOS ARM build and DMG release
-- `.github/workflows/windows.yml` — Windows build and release
+- `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution and Linux, macOS and Windows jobs
+- `.github/workflows/linux.yml` — Linux build and release with optional `tag`
+- `.github/workflows/mac.yml` — macOS ARM build and DMG release with optional `tag`
+- `.github/workflows/windows.yml` — Windows build and release with optional `tag`
 - `plan.md` — saved implementation plan and roadmap
 - `calantas.svg` — README logo
 
