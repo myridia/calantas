@@ -1,12 +1,13 @@
 # Prerequisites
 *.d
-build 
+build/
+dist/
 # Object files
 *.o
 *.ko
 *.obj
 *.elf
-nappgui_src
+nappgui_src/
 
 # Linker output
 *.ilk

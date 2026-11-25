@@ -35,6 +35,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean
+        shell: bash
+        run: rm -rf build dist
+
       - name: Build
         run: |
           cmake -S . -B build -DCMAKE_INSTALL_PREFIX=C:/nappgui -Dnappgui_DIR=C:/nappgui/cmake
