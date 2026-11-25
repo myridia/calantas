@@ -30,17 +30,19 @@ Implemented:
 - README logo, `AGENTS.md`, build scripts, `ask.sh` and project-map entry.
 - `ask.sh` fallbacks for missing `ask.d/` scripts.
 - macOS build support in `build.sh` and `run.sh`, including `.app` bundles.
+- Local persistence of account name, own status, buddies and recent messages in a text state file under the user config directory.
 
 Verified by the user:
 
 - Linux CMake configure and build succeeded.
 - App launched with the GTK3/X11 NAppGUI backend.
+- macOS build succeeded.
+- Windows CI build succeeded.
 
 Not verified yet:
 
-- Windows build and run.
-- macOS build and run.
-- GitHub Actions runs.
+- Manual UI checks on macOS and Windows.
+- Full GitHub Actions release uploads.
 
 ## Architecture
 
@@ -61,20 +63,15 @@ Rules:
 
 ## Roadmap
 
-1. Test Windows manually.
-   - Install NAppGUI with `ask.sh` task 1.
-   - Build with MSVC/CMake.
+1. Test Windows manually. Done: CI build passes; manual UI check still pending.
    - Check buddy list, search, add buddy, conversations, menus and close.
 
-2. Test macOS manually.
-   - Install NAppGUI with `ask.sh` task 2.
-   - Build with Xcode/CMake.
+2. Test macOS manually. Done: build passes; manual UI check still pending.
    - Check buddy list, conversations, Apple menu and Quit.
 
-3. Add local persistence.
-   - Save account name, status, buddies and recent messages.
-   - Keep it small and text-based first.
-   - Store under the user config directory.
+3. Add local persistence. Done.
+   - Account name, own status, buddies and recent messages are saved as text.
+   - State file: `~/.config/calantas/state.txt` on Linux/macOS, `%APPDATA%\Calantas\state.txt` on Windows.
 
 4. Add XMPP core with libstrophe.
    - JID/password account.

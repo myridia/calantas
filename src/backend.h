@@ -51,6 +51,10 @@ const CalMessage *cal_backend_message(const Backend *backend, uint32_t buddy, ui
 bool_t cal_backend_set_status(Backend *backend, cal_status_t status, const char_t *text);
 cal_status_t cal_backend_status(const Backend *backend);
 const char_t *cal_backend_status_text(const Backend *backend);
+bool_t cal_backend_set_account_name(Backend *backend, const char_t *name);
+const char_t *cal_backend_account_name(const Backend *backend);
+bool_t cal_backend_store(const Backend *backend);
+bool_t cal_backend_restore(Backend *backend);
 bool_t cal_backend_poll(Backend *backend, CalEvent *event);
 
 #endif

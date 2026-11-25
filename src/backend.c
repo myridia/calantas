@@ -3,12 +3,23 @@
 #include <nappgui.h>
 #include <sewer/bstd.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <direct.h>
+#define CAL_CREATE_DIR(path) _mkdir(path)
+#else
+#include <sys/stat.h>
+#define CAL_CREATE_DIR(path) mkdir(path, 0700)
+#endif
+
 #define CAL_MAX_BUDDIES CALANTAS_MAX_BUDDIES
 #define CAL_MAX_PENDING 32
+#define CAL_LINE_MAX 2048
+#define CAL_FIELD_MAX CALANTAS_MAX_TEXT
 
 typedef struct _pending_t
 {
@@ -24,6 +35,7 @@ struct _backend_t
     uint32_t count;
     cal_status_t status;
     char_t status_text[128];
+    char_t account_name[64];
     Pending pending[CAL_MAX_PENDING];
     CalEvent events[CAL_MAX_PENDING];
     uint32_t event_head;
@@ -72,7 +84,7 @@ static void i_add_message(Backend *backend, const uint32_t index, const bool_t o
     if (local != NULL)
         bstd_sprintf(stamp, sizeof(stamp), "%02d:%02d", local->tm_hour, local->tm_min);
     else
-        bstd_sprintf(stamp, sizeof(stamp), "--:--");
+        bstd_sprintf(stamp, sizeof(stamp), "%s", "--:--");
 
     message = &buddy->messages[buddy->message_count];
     bstd_sprintf(message->time, sizeof(message->time), "%s", stamp);
@@ -91,12 +103,173 @@ static void i_push_event(Backend *backend, const uint32_t buddy)
     backend->event_tail = (backend->event_tail + 1) % CAL_MAX_PENDING;
 }
 
+static bool_t i_config_path(char_t *out, const uint32_t size)
+{
+    char_t dir[1024];
+
+#if defined(_WIN32)
+    const char_t *base = getenv("APPDATA");
+    if (base == NULL || base[0] == '\0')
+        base = getenv("USERPROFILE");
+    if (base == NULL || base[0] == '\0')
+        return FALSE;
+    bstd_sprintf(dir, sizeof(dir), "%s\\Calantas", base);
+    CAL_CREATE_DIR(dir);
+    bstd_sprintf(out, size, "%s\\state.txt", dir);
+#else
+    const char_t *home = getenv("HOME");
+    char_t parent[1024];
+    if (home == NULL || home[0] == '\0')
+        return FALSE;
+    bstd_sprintf(parent, sizeof(parent), "%s/.config", home);
+    CAL_CREATE_DIR(parent);
+    bstd_sprintf(dir, sizeof(dir), "%s/.config/calantas", home);
+    CAL_CREATE_DIR(dir);
+    bstd_sprintf(out, size, "%s/state.txt", dir);
+#endif
+
+    return TRUE;
+}
+
+static void i_write_escaped(FILE *file, const char_t *text)
+{
+    const char_t *p;
+
+    if (text == NULL)
+        return;
+
+    for (p = text; *p != '\0'; p += 1)
+    {
+        if (*p == '\\' || *p == '|')
+        {
+            fputc('\\', file);
+            fputc(*p, file);
+        }
+        else if (*p == '\n')
+        {
+            fputs("\\n", file);
+        }
+        else if (*p == '\r')
+        {
+            fputs("\\r", file);
+        }
+        else
+        {
+            fputc(*p, file);
+        }
+    }
+}
+
+static void i_unescape(const char_t *src, char_t *dst, const uint32_t size)
+{
+    uint32_t n = 0;
+
+    while (*src != '\0' && n + 1 < size)
+    {
+        char_t c = *src;
+
+        if (c == '\\' && src[1] != '\0')
+        {
+            src += 1;
+            if (*src == 'n')
+                c = '\n';
+            else if (*src == 'r')
+                c = '\r';
+            else
+                c = *src;
+        }
+
+        dst[n++] = c;
+        src += 1;
+    }
+
+    dst[n] = '\0';
+}
+
+static uint32_t i_split_fields(const char_t *line, char_t fields[][CAL_FIELD_MAX],
+                               const uint32_t max)
+{
+    char_t token[CAL_LINE_MAX];
+    uint32_t n = 0;
+    uint32_t count = 0;
+    const char_t *p;
+
+    for (p = line; *p != '\0'; p += 1)
+    {
+        if (*p == '\\' && p[1] != '\0' && n + 2 < sizeof(token))
+        {
+            token[n++] = *p;
+            p += 1;
+            token[n++] = *p;
+        }
+        else if (*p == '|')
+        {
+            token[n] = '\0';
+            if (count < max)
+                i_unescape(token, fields[count], CAL_FIELD_MAX);
+            count += 1;
+            n = 0;
+        }
+        else if (n + 1 < sizeof(token))
+        {
+            token[n++] = *p;
+        }
+    }
+
+    token[n] = '\0';
+    if (count < max)
+        i_unescape(token, fields[count], CAL_FIELD_MAX);
+    count += 1;
+    return count;
+}
+
+static void i_strip_eol(char_t *line)
+{
+    size_t n = strlen(line);
+
+    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+        n -= 1;
+    line[n] = '\0';
+}
+
+static cal_status_t i_parse_status(const char_t *text)
+{
+    unsigned long value = strtoul(text, NULL, 10);
+
+    switch (value)
+    {
+    case 1:
+        return ekCAL_AWAY;
+    case 2:
+        return ekCAL_BUSY;
+    case 3:
+        return ekCAL_OFFLINE;
+    case 0:
+    default:
+        return ekCAL_AVAILABLE;
+    }
+}
+
+static uint32_t i_parse_u32(const char_t *text, const uint32_t max)
+{
+    unsigned long value = strtoul(text, NULL, 10);
+    return value > (unsigned long)max ? max : (uint32_t)value;
+}
+
+static void i_write_string(FILE *file, const char_t *prefix, const char_t *text)
+{
+    fputs(prefix, file);
+    i_write_escaped(file, text);
+    fputs("|\n", file);
+}
+
 Backend *cal_backend_create(void)
 {
     Backend *backend = heap_new0(Backend);
 
     backend->status = ekCAL_AVAILABLE;
     bstd_sprintf(backend->status_text, sizeof(backend->status_text), "%s", "Available with Calantas");
+    bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", "Me");
 
     i_init_buddy(&backend->buddies[backend->count++], "Ada Lovelace", "ada@example.org",
                  ekCAL_AVAILABLE, "Working on engines");
@@ -216,6 +389,22 @@ const char_t *cal_backend_status_text(const Backend *backend)
     return backend != NULL ? backend->status_text : "";
 }
 
+bool_t cal_backend_set_account_name(Backend *backend, const char_t *name)
+{
+    if (backend == NULL)
+        return FALSE;
+
+    if (name == NULL || name[0] == '\0')
+        name = "Me";
+    bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", name);
+    return TRUE;
+}
+
+const char_t *cal_backend_account_name(const Backend *backend)
+{
+    return backend != NULL ? backend->account_name : "";
+}
+
 bool_t cal_backend_poll(Backend *backend, CalEvent *event)
 {
     uint32_t i;
@@ -240,5 +429,130 @@ bool_t cal_backend_poll(Backend *backend, CalEvent *event)
 
     *event = backend->events[backend->event_head];
     backend->event_head = (backend->event_head + 1) % CAL_MAX_PENDING;
+    return TRUE;
+}
+
+bool_t cal_backend_store(const Backend *backend)
+{
+    char_t path[1200];
+    FILE *file;
+    uint32_t i;
+    uint32_t j;
+
+    if (backend == NULL || i_config_path(path, (uint32_t)sizeof(path)) == FALSE)
+        return FALSE;
+
+    file = fopen(path, "wb");
+    if (file == NULL)
+        return FALSE;
+
+    fputs("CALANTAS1\n", file);
+    i_write_string(file, "A|", backend->account_name);
+    fprintf(file, "S|%u|", (unsigned)backend->status);
+    i_write_escaped(file, backend->status_text);
+    fputs("|\n", file);
+    fprintf(file, "N|%u|\n", (unsigned)backend->count);
+
+    for (i = 0; i < backend->count; i += 1)
+    {
+        const CalBuddy *buddy = &backend->buddies[i];
+
+        fputs("B|", file);
+        i_write_escaped(file, buddy->name);
+        fputc('|', file);
+        i_write_escaped(file, buddy->handle);
+        fputc('|', file);
+        fprintf(file, "%u|", (unsigned)buddy->status);
+        i_write_escaped(file, buddy->status_text);
+        fprintf(file, "|%u|\n", (unsigned)buddy->message_count);
+
+        for (j = 0; j < buddy->message_count; j += 1)
+        {
+            const CalMessage *message = &buddy->messages[j];
+
+            fputs("M|", file);
+            i_write_escaped(file, message->time);
+            fputc('|', file);
+            i_write_escaped(file, message->sender);
+            fprintf(file, "|%u|", message->own ? 1u : 0u);
+            i_write_escaped(file, message->text);
+            fputs("|\n", file);
+        }
+    }
+
+    fclose(file);
+#if !defined(_WIN32)
+    chmod(path, 0600);
+#endif
+    return TRUE;
+}
+
+bool_t cal_backend_restore(Backend *backend)
+{
+    char_t path[1200];
+    char_t line[CAL_LINE_MAX];
+    char_t fields[8][CAL_FIELD_MAX];
+    FILE *file;
+
+    if (backend == NULL || i_config_path(path, (uint32_t)sizeof(path)) == FALSE)
+        return FALSE;
+
+    file = fopen(path, "rb");
+    if (file == NULL)
+        return FALSE;
+
+    while (fgets(line, sizeof(line), file) != NULL)
+    {
+        uint32_t nfields;
+
+        i_strip_eol(line);
+        nfields = i_split_fields(line, fields, 8);
+        if (nfields < 2)
+            continue;
+
+        if (strcmp(fields[0], "A") == 0 && nfields >= 3)
+        {
+            bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", fields[1]);
+        }
+        else if (strcmp(fields[0], "S") == 0 && nfields >= 4)
+        {
+            backend->status = i_parse_status(fields[1]);
+            bstd_sprintf(backend->status_text, sizeof(backend->status_text), "%s", fields[2]);
+        }
+        else if (strcmp(fields[0], "N") == 0 && nfields >= 3)
+        {
+            backend->count = i_parse_u32(fields[1], CAL_MAX_BUDDIES);
+        }
+        else if (strcmp(fields[0], "B") == 0 && nfields >= 7)
+        {
+            CalBuddy *buddy;
+
+            if (backend->count >= CAL_MAX_BUDDIES)
+                continue;
+            buddy = &backend->buddies[backend->count];
+            i_init_buddy(buddy, fields[1], fields[2], i_parse_status(fields[3]), fields[4]);
+            buddy->message_count = i_parse_u32(fields[5], CALANTAS_MAX_MESSAGES);
+            backend->count += 1;
+        }
+        else if (strcmp(fields[0], "M") == 0 && nfields >= 6)
+        {
+            CalBuddy *buddy;
+            CalMessage *message;
+
+            if (backend->count == 0)
+                continue;
+            buddy = &backend->buddies[backend->count - 1];
+            if (buddy->message_count >= CALANTAS_MAX_MESSAGES)
+                continue;
+            message = &buddy->messages[buddy->message_count];
+            bstd_sprintf(message->time, sizeof(message->time), "%s", fields[1]);
+            bstd_sprintf(message->sender, sizeof(message->sender), "%s", fields[2]);
+            message->own = strcmp(fields[3], "1") == 0 ? TRUE : FALSE;
+            bstd_sprintf(message->text, sizeof(message->text), "%s", fields[4]);
+            buddy->message_count += 1;
+        }
+    }
+
+    fclose(file);
     return TRUE;
 }

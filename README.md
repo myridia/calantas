@@ -4,7 +4,7 @@
 
 A basic desktop messenger with the classic Pidgin-style buddy list, written in C with NAppGUI. Calantas uses its own backend interface and does not include `libpurple3`, GTK or Libadwaita.
 
-The first version ships with a mock/local backend: buddies have presence, messages can be sent, and the backend replies locally so the full chat flow can be tested without a network service.
+The first version ships with a mock/local backend: buddies have presence, messages can be sent, and the backend replies locally so the full chat flow can be tested without a network service. Account details, buddies and recent messages are saved between runs.
 
 ## Stack
 
@@ -47,12 +47,13 @@ NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on W
 - Status menu: Available, Away, Busy, Offline
 - Contacts menu with online-only and all-buddies views
 - About dialog and platform-style app menu
+- Local state file for account name, status, buddies and recent messages
 
 ## Structure
 
 - `src/main.c` — `osmain_sync` entry point
 - `src/gui.c` / `src/gui.h` — NAppGUI windows, buddy list, conversations, menus and dialogs
-- `src/backend.c` / `src/backend.h` — messenger model and mock/local backend
+- `src/backend.c` / `src/backend.h` — messenger model, mock/local backend and text state persistence
 - `src/res/` — application icons
 - `CMakeLists.txt` — top-level NAppGUI project
 - `src/CMakeLists.txt` — desktop app target

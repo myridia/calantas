@@ -61,7 +61,6 @@ struct _app_t
     uint32_t *rows;
     uint32_t nrows;
     char_t search[128];
-    char_t account_name[64];
     bool_t show_offline;
     Backend *backend;
     Chat *chats[CAL_MAX_CHATS];
@@ -73,7 +72,7 @@ static void i_set_status(App *app, const char_t *text)
 
     cassert_no_null(app);
     label_text(app->status, text != NULL ? text : "");
-    bstd_sprintf(line, sizeof(line), "%s - %s", app->account_name,
+    bstd_sprintf(line, sizeof(line), "%s - %s", cal_backend_account_name(app->backend),
                  cal_backend_status_text(app->backend));
     label_text(app->account, line);
 }
@@ -163,6 +162,7 @@ static const char_t *i_status_mark(const cal_status_t status)
 static void i_apply_status(App *app, const cal_status_t status, const char_t *text)
 {
     cal_backend_set_status(app->backend, status, text);
+    cal_backend_store(app->backend);
     i_rebuild_rows(app);
     i_refresh_table(app);
     i_set_status(app, text);
@@ -247,6 +247,7 @@ static void i_OnChatSend(Chat *chat, Event *e)
         if (cal_backend_send(chat->app->backend, chat->index, text) == TRUE)
         {
             edit_text(chat->input, "");
+            cal_backend_store(chat->app->backend);
             i_refresh_chat(chat);
             i_set_status(chat->app, "Message sent");
         }
@@ -374,9 +375,9 @@ static void i_OnAccountOk(Account *form, Event *e)
     const char_t *name = edit_get_text(form->name);
     const char_t *text = edit_get_text(form->status);
 
-    bstd_sprintf(form->app->account_name, sizeof(form->app->account_name), "%s",
-                 name != NULL && name[0] != '\0' ? name : "Me");
+    cal_backend_set_account_name(form->app->backend, name);
     cal_backend_set_status(form->app->backend, cal_backend_status(form->app->backend), text);
+    cal_backend_store(form->app->backend);
     form->accepted = TRUE;
     window_stop_modal(form->window, 1);
     unref(e);
@@ -412,7 +413,7 @@ static void i_OnAccount(App *app, Event *e)
     window_title(window, "Account");
     label_text(name_label, "Name:");
     label_text(status_label, "Status:");
-    edit_text(name, app->account_name);
+    edit_text(name, cal_backend_account_name(app->backend));
     edit_text(status, cal_backend_status_text(app->backend));
     edit_width(name, 300);
     edit_width(status, 300);
@@ -455,6 +456,8 @@ static void i_OnBuddyOk(BuddyForm *form, Event *e)
     const char_t *handle = edit_get_text(form->handle);
 
     form->accepted = cal_backend_add_buddy(form->app->backend, name, handle);
+    if (form->accepted == TRUE)
+        cal_backend_store(form->app->backend);
     window_stop_modal(form->window, form->accepted == TRUE ? 1 : 0);
     unref(e);
 }
@@ -725,7 +728,7 @@ App *calantas_create(void)
 
     app->backend = cal_backend_create();
     app->show_offline = TRUE;
-    bstd_sprintf(app->account_name, sizeof(app->account_name), "%s", "Me");
+    cal_backend_restore(app->backend);
 
     app->window = window_create(ekWINDOW_STDRES);
     app->table = tableview_create();
@@ -833,6 +836,7 @@ void calantas_destroy(App **app)
         free((*app)->rows);
 
     window_destroy(&(*app)->window);
+    cal_backend_store((*app)->backend);
     cal_backend_destroy(&(*app)->backend);
     heap_delete(app, App);
 }
@@ -847,6 +851,7 @@ void calantas_update(App *app, const real64_t prtime, const real64_t ctime)
         i_refresh_table(app);
         if (event.buddy < CAL_MAX_CHATS && app->chats[event.buddy] != NULL)
             i_refresh_chat(app->chats[event.buddy]);
+        cal_backend_store(app->backend);
         i_set_status(app, "Message received");
     }
 

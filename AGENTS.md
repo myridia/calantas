@@ -39,6 +39,7 @@ The user builds and runs:
 ## Architecture
 - The GUI depends only on `backend.h`.
 - The mock backend supplies buddies, presence, sent messages and local replies.
+- `cal_backend_store()` / `cal_backend_restore()` keep account name, status, buddies and recent messages in a text state file under the user config directory.
 - `calantas_update()` polls backend events on the NAppGUI ticker.
 - Conversation windows are one per buddy, created on demand.
 - Planned backends: XMPP with libstrophe, IRC, Telegram with TDLib, ActivityPub via Mastodon API, then raw ActivityPub.
