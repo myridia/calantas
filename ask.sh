@@ -17,12 +17,13 @@ show_menu() {
 }
 
 i_install_nappgui_darwin() {
-  cd "$ROOT" || return 1
-  if [ ! -d nappgui_src ]; then
-    git clone --depth 1 https://github.com/frang75/nappgui_src.git || return 1
+  NAPPGUI_SRC="${NAPPGUI_SRC:-$HOME/.cache/calantas/nappgui_src}"
+  mkdir -p "$(dirname "$NAPPGUI_SRC")" || return 1
+  if [ ! -d "$NAPPGUI_SRC" ]; then
+    git clone --depth 1 https://github.com/frang75/nappgui_src.git "$NAPPGUI_SRC" || return 1
   fi
 
-  cd nappgui_src || return 1
+  cd "$NAPPGUI_SRC" || return 1
 
   OPENSSL_ARG=""
   if command -v brew >/dev/null 2>&1; then
@@ -44,14 +45,16 @@ i_install_nappgui_darwin() {
 }
 
 i_install_nappgui_linux() {
-  cd "$ROOT" || return 1
   sudo apt-get update || return 1
   sudo apt-get install build-essential git cmake libgtk-3-dev mesa-common-dev libglu1-mesa-dev -y || return 1
-  if [ ! -d nappgui_src ]; then
-    git clone --depth 1 https://github.com/frang75/nappgui_src.git || return 1
+
+  NAPPGUI_SRC="${NAPPGUI_SRC:-$HOME/.cache/calantas/nappgui_src}"
+  mkdir -p "$(dirname "$NAPPGUI_SRC")" || return 1
+  if [ ! -d "$NAPPGUI_SRC" ]; then
+    git clone --depth 1 https://github.com/frang75/nappgui_src.git "$NAPPGUI_SRC" || return 1
   fi
 
-  cd nappgui_src || return 1
+  cd "$NAPPGUI_SRC" || return 1
   cmake -S . -B build -DNAPPGUI_DEMO=NO -DCMAKE_BUILD_TYPE=Release || return 1
   cmake --build build -j 4 || return 1
   sudo cmake --install build --config Release --prefix /usr/local/nappgui || return 1
@@ -63,12 +66,13 @@ i_install_nappgui_linux() {
 }
 
 i_install_nappgui_windows() {
-  cd "$ROOT" || return 1
-  if [ ! -d nappgui_src ]; then
-    git clone --depth 1 https://github.com/frang75/nappgui_src.git || return 1
+  NAPPGUI_SRC="${NAPPGUI_SRC:-$HOME/.cache/calantas/nappgui_src}"
+  mkdir -p "$(dirname "$NAPPGUI_SRC")" || return 1
+  if [ ! -d "$NAPPGUI_SRC" ]; then
+    git clone --depth 1 https://github.com/frang75/nappgui_src.git "$NAPPGUI_SRC" || return 1
   fi
 
-  cd nappgui_src || return 1
+  cd "$NAPPGUI_SRC" || return 1
   cmake -S . -B build -DNAPPGUI_DEMO=NO || return 1
   cmake --build build --config Release -j 4 || return 1
   cmake --install build --config Release --prefix C:/nappgui || return 1
