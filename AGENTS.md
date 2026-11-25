@@ -27,12 +27,13 @@ The user builds and runs:
 - `src/res/` — icons
 - `CMakeLists.txt` — NAppGUI package lookup and project setup
 - `src/CMakeLists.txt` — `nap_desktop_app`
-- `ask.sh` / `ask.d/` — install/build/run tasks
-- `build.sh` / `run.sh` — direct build and launch
+- `ask.sh` / `ask.d/` — install/build/run tasks with built-in fallbacks when `ask.d/` is missing
+- `build.sh` / `run.sh` — direct build and launch, including macOS `.app` bundles
 - `.github/workflows/control.yml` — single CI entry point with Linux, macOS and Windows jobs
 - `.github/workflows/linux.yml` — Linux build and release
 - `.github/workflows/mac.yml` — macOS ARM build and DMG release
 - `.github/workflows/windows.yml` — Windows build and release
+- `plan.md` — saved implementation plan and roadmap
 - `calantas.svg` — README logo
 
 ## Architecture

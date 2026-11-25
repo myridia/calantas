@@ -28,6 +28,8 @@ Implemented:
 - Mock/local backend with initial buddies, presence, sent messages and delayed local replies.
 - Linux, macOS and Windows GitHub Actions workflows with release uploads.
 - README logo, `AGENTS.md`, build scripts, `ask.sh` and project-map entry.
+- `ask.sh` fallbacks for missing `ask.d/` scripts.
+- macOS build support in `build.sh` and `run.sh`, including `.app` bundles.
 
 Verified by the user:
 

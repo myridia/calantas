@@ -1,6 +1,7 @@
 #!/bin/sh
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+ROOT="$SCRIPT_DIR"
 
 show_menu() {
   printf "%s\n" '  ┌─────┬──────────────────────────────────────────────┐'
@@ -15,6 +16,120 @@ show_menu() {
   printf "%s\n" '  └─────┴──────────────────────────────────────────────┘'
 }
 
+i_install_nappgui_darwin() {
+  cd "$ROOT" || return 1
+  if [ ! -d nappgui_src ]; then
+    git clone --depth 1 https://github.com/frang75/nappgui_src.git || return 1
+  fi
+
+  cd nappgui_src || return 1
+
+  OPENSSL_ARG=""
+  if command -v brew >/dev/null 2>&1; then
+    brew install openssl@3 || return 1
+    OPENSSL_ROOT=$(brew --prefix openssl@3 2>/dev/null || true)
+    if [ -n "$OPENSSL_ROOT" ]; then
+      OPENSSL_ARG="-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT"
+    fi
+  fi
+
+  cmake -G Xcode -S . -B build -DNAPPGUI_DEMO=NO -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG || return 1
+  cmake --build build --config Release -j 4 || return 1
+  sudo cmake --install build --config Release --prefix /usr/local/nappgui
+}
+
+i_install_nappgui_linux() {
+  cd "$ROOT" || return 1
+  sudo apt-get update || return 1
+  sudo apt-get install build-essential git cmake libgtk-3-dev mesa-common-dev libglu1-mesa-dev -y || return 1
+  if [ ! -d nappgui_src ]; then
+    git clone --depth 1 https://github.com/frang75/nappgui_src.git || return 1
+  fi
+
+  cd nappgui_src || return 1
+  cmake -S . -B build -DNAPPGUI_DEMO=NO -DCMAKE_BUILD_TYPE=Release || return 1
+  cmake --build build -j 4 || return 1
+  sudo cmake --install build --config Release --prefix /usr/local/nappgui
+}
+
+i_install_nappgui_windows() {
+  cd "$ROOT" || return 1
+  if [ ! -d nappgui_src ]; then
+    git clone --depth 1 https://github.com/frang75/nappgui_src.git || return 1
+  fi
+
+  cd nappgui_src || return 1
+  cmake -S . -B build -DNAPPGUI_DEMO=NO || return 1
+  cmake --build build --config Release -j 4 || return 1
+  cmake --install build --config Release --prefix C:/nappgui
+}
+
+i_launch_app() {
+  cd "$ROOT" || return 1
+  if [ -x "build/Release/bin/calantas" ]; then
+    "build/Release/bin/calantas"
+  elif [ -x "build/Release/bin/calantas.exe" ]; then
+    "build/Release/bin/calantas.exe"
+  elif [ -x "build/Release/bin/calantas.app/Contents/MacOS/calantas" ]; then
+    "build/Release/bin/calantas.app/Contents/MacOS/calantas"
+  elif [ -d "build/Release/bin/calantas.app" ]; then
+    open "build/Release/bin/calantas.app"
+  else
+    printf "  No calantas binary found. Build first with task 4.\n"
+    return 1
+  fi
+}
+
+i_build_app() {
+  cd "$ROOT" || return 1
+  rm -rf build dist
+
+  if [ "$(uname)" = "Darwin" ]; then
+    OPENSSL_ARG=""
+    if command -v brew >/dev/null 2>&1; then
+      OPENSSL_ROOT=$(brew --prefix openssl@3 2>/dev/null || true)
+      if [ -n "$OPENSSL_ROOT" ]; then
+        OPENSSL_ARG="-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT"
+      fi
+    fi
+
+    cmake -G Xcode -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG || return 1
+    cmake --build build --config Release || return 1
+  else
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local/nappgui || return 1
+    cmake --build build || return 1
+  fi
+
+  i_launch_app
+}
+
+run_task() {
+  id="$1"
+  script="$2"
+  path="$SCRIPT_DIR/ask.d/$script"
+
+  if [ -f "$path" ]; then
+    if [ -x "$path" ]; then
+      "$path"
+    else
+      sh "$path"
+    fi
+    return $?
+  fi
+
+  case "$id" in
+    1) i_install_nappgui_windows ;;
+    2) i_install_nappgui_darwin ;;
+    3) i_install_nappgui_linux ;;
+    4) i_build_app ;;
+    5) i_launch_app ;;
+    *)
+      printf "  Missing task script: ask.d/%s\n" "$script"
+      return 1
+      ;;
+  esac
+}
+
 printf "\n  calantas — Task Runner\n\n"
 
 while true; do
@@ -26,23 +141,21 @@ while true; do
   if [ "$task" = "0" ]; then
     printf "  Goodbye!\n"
     exit 0
-  fi
-
-  if [ "$task" = "1" ]; then
+  elif [ "$task" = "1" ]; then
     printf "  ...installing NAppGUI for Windows\n"
-    "$SCRIPT_DIR/ask.d/install_nappgui_windows.sh"
+    run_task 1 install_nappgui_windows.sh
   elif [ "$task" = "2" ]; then
     printf "  ...installing NAppGUI for macOS\n"
-    "$SCRIPT_DIR/ask.d/install_nappgui_macos.sh"
+    run_task 2 install_nappgui_macos.sh
   elif [ "$task" = "3" ]; then
     printf "  ...installing NAppGUI for Linux\n"
-    "$SCRIPT_DIR/ask.d/install_nappgui_linux.sh"
+    run_task 3 install_nappgui_linux.sh
   elif [ "$task" = "4" ]; then
     printf "  ...building and running the app\n"
-    "$SCRIPT_DIR/ask.d/build.sh"
+    run_task 4 build.sh
   elif [ "$task" = "5" ]; then
     printf "  ...running the app\n"
-    "$SCRIPT_DIR/ask.d/run.sh"
+    run_task 5 run.sh
   else
     printf "  Unknown task: %s\n" "$task"
   fi

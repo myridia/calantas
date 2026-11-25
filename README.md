@@ -59,6 +59,7 @@ The binary is written to `build/Release/bin/calantas`.
 - `ask.sh` / `ask.d/` — task runner
 - `.github/workflows/control.yml` — single CI entry point
 - `.github/workflows/{linux,mac,windows}.yml` — platform build and release workflows
+- `plan.md` — saved implementation plan and roadmap
 - `calantas.svg` — project logo
 
 ## Backend plan
