@@ -35,7 +35,12 @@ i_install_nappgui_darwin() {
 
   cmake -G Xcode -S . -B build -DNAPPGUI_DEMO=NO -DDEPLOYMENT_TARGET_OSX=14.0 $OPENSSL_ARG || return 1
   cmake --build build --config Release -j 4 || return 1
-  sudo cmake --install build --config Release --prefix /usr/local/nappgui
+  sudo cmake --install build --config Release --prefix /usr/local/nappgui || return 1
+
+  if [ ! -f "/usr/local/nappgui/cmake/nappgui-config.cmake" ]; then
+    printf "  NAppGUI install failed: /usr/local/nappgui/cmake/nappgui-config.cmake was not created\n" >&2
+    return 1
+  fi
 }
 
 i_install_nappgui_linux() {
@@ -49,7 +54,12 @@ i_install_nappgui_linux() {
   cd nappgui_src || return 1
   cmake -S . -B build -DNAPPGUI_DEMO=NO -DCMAKE_BUILD_TYPE=Release || return 1
   cmake --build build -j 4 || return 1
-  sudo cmake --install build --config Release --prefix /usr/local/nappgui
+  sudo cmake --install build --config Release --prefix /usr/local/nappgui || return 1
+
+  if [ ! -f "/usr/local/nappgui/cmake/nappgui-config.cmake" ]; then
+    printf "  NAppGUI install failed: /usr/local/nappgui/cmake/nappgui-config.cmake was not created\n" >&2
+    return 1
+  fi
 }
 
 i_install_nappgui_windows() {
@@ -61,7 +71,12 @@ i_install_nappgui_windows() {
   cd nappgui_src || return 1
   cmake -S . -B build -DNAPPGUI_DEMO=NO || return 1
   cmake --build build --config Release -j 4 || return 1
-  cmake --install build --config Release --prefix C:/nappgui
+  cmake --install build --config Release --prefix C:/nappgui || return 1
+
+  if [ ! -f "C:/nappgui/cmake/nappgui-config.cmake" ]; then
+    printf "  NAppGUI install failed: C:/nappgui/cmake/nappgui-config.cmake was not created\n" >&2
+    return 1
+  fi
 }
 
 i_launch_app() {
