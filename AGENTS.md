@@ -34,6 +34,7 @@ The user builds and runs:
 - `ask.sh` / `ask.d/` — install/build/run/clean tasks with built-in fallbacks when `ask.d/` is missing; task 6 cleans `build/` and `dist/`; task 7 installs XMPP libraries; task 8 installs NAppGUI plus all XMPP, Telegram and ActivityPub dependencies
 - `build.sh` / `run.sh` — direct build and launch, including macOS `.app` bundles
 - `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution and Linux, macOS and Windows jobs; runs for repository owners `myridia` and `veto8`
+- `.github/workflows/automerge.yml` — auto-enables squash auto-merge for pull requests from `veto8`
 - `.github/workflows/linux.yml` — Linux build and release with optional `tag`; writes `telegram-app.json` from `API_ID`/`API_HASH` secrets before compile
 - `.github/workflows/mac.yml` — macOS ARM build and DMG release with optional `tag`; writes `telegram-app.json` from `API_ID`/`API_HASH` secrets before compile
 - `.github/workflows/windows.yml` — Windows build and release with optional `tag`; writes `telegram-app.json` from `API_ID`/`API_HASH` secrets before compile
@@ -46,6 +47,7 @@ The user builds and runs:
 - The Telegram backend uses TDLib's JSON C API on a worker thread; it handles phone/bot-token/code/2FA login, chats and text messages, and pushes events to the GUI thread. `setTdlibParameters` fields must be inlined for TDLib 1.8.6+; a nested `parameters` object is ignored and produces `api_id = 0`.
 - The account manager opens separate XMPP and Telegram forms; Edit opens the form matching the saved protocol. The Telegram form uses phone-number login by default, optional bot-token mode, and a bottom Activity log that shows TDLib authorization states and errors. Telegram app API ID/hash are never shown in the GUI; builders bake them into the binary through a gitignored `telegram-app.json` copied from `telegram-app.example.json`, with a local fallback to credentials from an existing saved Telegram account. API ID must be a positive numeric value and API hash must be 32 hex characters. Test Connection and the saved connection worker share the same TDLib database so an authorized test session carries over to the live worker.
 - `account.json` keeps a list of accounts with name, protocol, JID/identity, password/code, server, Telegram API ID/hash and auto-connect flag. `cal_backend_store()` / `cal_backend_restore()` keep status, buddies and recent messages in `state-xmpp.txt` / `state-xmpp-NAME.txt` or `state-telegram.txt` / `state-telegram-NAME.txt` under the user config directory. Secrets are stored in plain text with user-only permissions on Unix.
+- TDLib session databases live under `~/.config/calantas/calantas-telegram-test-<hash>` on Unix and `%APPDATA%\Calantas\tdlib\...` on Windows; the suffix is a stable hash of identity plus baked API ID/hash, so the same account and build reuse one database.
 - `calantas_update()` polls backend events on the NAppGUI ticker.
 - Conversation windows are one per buddy, created on demand; they track the buddy handle so roster reordering does not retarget them.
 - Planned backends: IRC, ActivityPub via Mastodon API, then raw ActivityPub.
