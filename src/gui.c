@@ -36,13 +36,20 @@ struct _account_t
 {
     App *app;
     Window *window;
-    Label *protocol;
+    Combo *protocol;
     Edit *name;
     Edit *jid;
     Edit *password;
     Edit *server;
+    Edit *api_id;
+    Edit *api_hash;
     Edit *status;
     Button *auto_connect;
+    Label *identity_label;
+    Label *password_label;
+    Label *server_label;
+    Label *api_id_label;
+    Label *api_hash_label;
     Label *result;
     char_t original[64];
     bool_t is_new;
@@ -503,6 +510,59 @@ static void i_OnMessage(App *app, Event *e)
     else if (row < app->nrows)
         i_open_chat(app, app->rows[row]);
 
+    unref(e);
+}
+
+static uint32_t i_protocol_index(const char_t *protocol)
+{
+    uint32_t i;
+
+    if (protocol == NULL)
+        return 0;
+    for (i = 0; protocol[i] != '\0'; i += 1)
+    {
+        if (tolower((unsigned char)protocol[i]) != "telegram"[i])
+            return 0;
+    }
+    return i == 8 ? 1 : 0;
+}
+
+static const char_t *i_protocol_from_index(const uint32_t index)
+{
+    return index == 1 ? "Telegram" : "XMPP";
+}
+
+static bool_t i_form_telegram(const Account *form)
+{
+    return form != NULL && combo_get_selected(form->protocol) == 1 ? TRUE : FALSE;
+}
+
+static void i_update_account_fields(Account *form)
+{
+    bool_t telegram = i_form_telegram(form);
+
+    label_text(form->identity_label, telegram == TRUE ? "Phone or bot token:" : "JID:");
+    label_text(form->password_label,
+               telegram == TRUE ? "Code / 2FA password:" : "Password:");
+    label_text(form->server_label, telegram == TRUE ? "Server (unused):" : "Server:");
+    label_text(form->api_id_label, telegram == TRUE ? "Telegram API ID:" : "API ID:");
+    label_text(form->api_hash_label, telegram == TRUE ? "Telegram API hash:" : "API hash:");
+    edit_phtext(form->jid, telegram == TRUE ? "+15551234567 or 123456:TOKEN"
+                                           : "user@example.org");
+    edit_phtext(form->password, telegram == TRUE ? "Login code or 2FA password"
+                                                : "Saved in account.json");
+    edit_phtext(form->api_id, telegram == TRUE ? "From my.telegram.org/apps" : "Not used by XMPP");
+    edit_phtext(form->api_hash, telegram == TRUE ? "From my.telegram.org/apps" : "Not used by XMPP");
+    edit_editable(form->api_id, telegram == TRUE ? TRUE : FALSE);
+    edit_editable(form->api_hash, telegram == TRUE ? TRUE : FALSE);
+    button_text(form->auto_connect,
+                telegram == TRUE ? "Connect automatically on startup (Telegram)"
+                                 : "Connect automatically on startup (XMPP)");
+}
+
+static void i_OnProtocolChange(Account *form, Event *e)
+{
+    i_update_account_fields(form);
     unref(e);
 }
 

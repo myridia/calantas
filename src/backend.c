@@ -1,6 +1,7 @@
 #include "backend.h"
 
 #include "xmpp.h"
+#include "telegram.h"
 
 #include <nappgui.h>
 #include <sewer/bstd.h>
@@ -39,12 +40,16 @@ struct _backend_t
     char_t status_text[128];
     char_t account_name[64];
     char_t account_marker[64];
+    char_t protocol[16];
     char_t jid[128];
     char_t server[128];
     char_t password[128];
+    char_t api_id[32];
+    char_t api_hash[64];
     char_t connection_text[256];
     bool_t auto_connect;
     XmppBackend *xmpp;
+    TelegramBackend *telegram;
     CalEvent events[CAL_MAX_PENDING];
     uint32_t event_head;
     uint32_t event_tail;
@@ -145,6 +150,42 @@ static bool_t i_same_handle(const char_t *left, const char_t *right)
     return left[i] == '\0' && right[i] == '\0';
 }
 
+static bool_t i_is_telegram(const char_t *protocol)
+{
+    uint32_t i;
+
+    if (protocol == NULL)
+        return FALSE;
+    for (i = 0; protocol[i] != '\0'; i += 1)
+    {
+        if (tolower((unsigned char)protocol[i]) != "telegram"[i])
+            return FALSE;
+    }
+    return i == 8;
+}
+
+static const char_t *i_protocol_name(const char_t *protocol)
+{
+    return i_is_telegram(protocol) == TRUE ? "Telegram" : "XMPP";
+}
+
+static void i_normalize_account(CalAccount *account)
+{
+    if (account == NULL)
+        return;
+    if (account->protocol[0] == '\0')
+        bstd_sprintf(account->protocol, sizeof(account->protocol), "%s", "XMPP");
+    else if (i_is_telegram(account->protocol) == TRUE)
+        bstd_sprintf(account->protocol, sizeof(account->protocol), "%s", "Telegram");
+    else
+        bstd_sprintf(account->protocol, sizeof(account->protocol), "%s", "XMPP");
+}
+
+static const char_t *i_disconnected_text(const char_t *protocol)
+{
+    return i_is_telegram(protocol) == TRUE ? "Telegram not connected" : "XMPP not connected";
+}
+
 static uint32_t i_find_buddy(const Backend *backend, const char_t *handle)
 {
     char_t wanted[128];
@@ -224,6 +265,36 @@ static void i_poll_xmpp_events(Backend *backend)
         else if (event.type == ekCAL_XMPP_EVENT_CONNECTION)
         {
             bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s", event.text);
+            i_push_event(backend, 0, ekCAL_EVENT_CONNECTION, event.text);
+        }
+    }
+}
+
+static void i_poll_telegram_events(Backend *backend)
+{
+    CalTelegramEvent event;
+
+    while (cal_telegram_pop_event(backend->telegram, &event) == TRUE)
+    {
+        if (event.type == ekCAL_TG_EVENT_CONTACT)
+        {
+            uint32_t index = i_contact(backend, event.name, event.jid, ekCAL_AVAILABLE, "");
+            if (index < CALANTAS_MAX_BUDDIES)
+                i_push_event(backend, index, ekCAL_EVENT_CONTACTS, "Contact list updated");
+        }
+        else if (event.type == ekCAL_TG_EVENT_MESSAGE)
+        {
+            uint32_t index = i_contact(backend, "", event.jid, ekCAL_AVAILABLE, "");
+            if (index < CALANTAS_MAX_BUDDIES)
+            {
+                i_add_message(backend, index, FALSE, event.text);
+                i_push_event(backend, index, ekCAL_EVENT_MESSAGE, "Message received");
+            }
+        }
+        else if (event.type == ekCAL_TG_EVENT_CONNECTION)
+        {
+            bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                         event.text);
             i_push_event(backend, 0, ekCAL_EVENT_CONNECTION, event.text);
         }
     }
@@ -332,27 +403,32 @@ static void i_account_default_name(const CalAccount *account, char_t *out, const
             return;
     }
 
-    bstd_sprintf(out, size, "%s", "XMPP");
+    bstd_sprintf(out, size, "%s", i_protocol_name(account != NULL ? account->protocol : NULL));
 }
 
-static bool_t i_state_path(char_t *out, const uint32_t size, const char_t *marker)
+static bool_t i_state_path(char_t *out, const uint32_t size, const char_t *marker,
+                           const char_t *protocol)
 {
     char_t dir[1024];
     char_t safe[64];
+    const char_t *prefix;
 
     if (i_config_dir(dir, sizeof(dir)) == FALSE)
         return FALSE;
     i_safe_marker(safe, sizeof(safe), marker);
+    prefix = i_is_telegram(protocol) == TRUE ? "telegram" : "xmpp";
 #if defined(_WIN32)
-    if (safe[0] == '\0' || strcmp(safe, "XMPP") == 0)
-        bstd_sprintf(out, size, "%s\\state-xmpp.txt", dir);
+    if (safe[0] == '\0' || strcmp(safe, "XMPP") == 0
+        || strcmp(safe, "Telegram") == 0)
+        bstd_sprintf(out, size, "%s\\state-%s.txt", dir, prefix);
     else
-        bstd_sprintf(out, size, "%s\\state-xmpp-%s.txt", dir, safe);
+        bstd_sprintf(out, size, "%s\\state-%s-%s.txt", dir, prefix, safe);
 #else
-    if (safe[0] == '\0' || strcmp(safe, "XMPP") == 0)
-        bstd_sprintf(out, size, "%s/state-xmpp.txt", dir);
+    if (safe[0] == '\0' || strcmp(safe, "XMPP") == 0
+        || strcmp(safe, "Telegram") == 0)
+        bstd_sprintf(out, size, "%s/state-%s.txt", dir, prefix);
     else
-        bstd_sprintf(out, size, "%s/state-xmpp-%s.txt", dir, safe);
+        bstd_sprintf(out, size, "%s/state-%s-%s.txt", dir, prefix, safe);
 #endif
     return TRUE;
 }
@@ -729,12 +805,18 @@ static bool_t i_save_account_store(const AccountStore *store)
 
         fputs("    {\n      \"name\": ", file);
         i_json_write_string(file, account->name);
+        fputs(",\n      \"protocol\": ", file);
+        i_json_write_string(file, account->protocol);
         fputs(",\n      \"jid\": ", file);
         i_json_write_string(file, account->jid);
         fputs(",\n      \"password\": ", file);
         i_json_write_string(file, account->password);
         fputs(",\n      \"server\": ", file);
         i_json_write_string(file, account->server);
+        fputs(",\n      \"api_id\": ", file);
+        i_json_write_string(file, account->api_id);
+        fputs(",\n      \"api_hash\": ", file);
+        i_json_write_string(file, account->api_hash);
         fprintf(file, ",\n      \"auto_connect\": %s\n    }%s\n",
                 account->auto_connect == TRUE ? "true" : "false",
                 i + 1 < store->count ? "," : "");
@@ -773,6 +855,7 @@ static bool_t i_read_account_file(const char_t *path, CalAccount *account)
 
     memset(account, 0, sizeof(*account));
     bstd_sprintf(account->name, sizeof(account->name), "%s", "XMPP");
+    bstd_sprintf(account->protocol, sizeof(account->protocol), "%s", "XMPP");
     while (fgets(line, sizeof(line), file) != NULL)
     {
         uint32_t nfields;
@@ -791,8 +874,15 @@ static bool_t i_read_account_file(const char_t *path, CalAccount *account)
             bstd_sprintf(account->server, sizeof(account->server), "%s", fields[1]);
         else if (strcmp(fields[0], "P") == 0)
             bstd_sprintf(account->password, sizeof(account->password), "%s", fields[1]);
+        else if (strcmp(fields[0], "T") == 0)
+            bstd_sprintf(account->protocol, sizeof(account->protocol), "%s", fields[1]);
+        else if (strcmp(fields[0], "I") == 0)
+            bstd_sprintf(account->api_id, sizeof(account->api_id), "%s", fields[1]);
+        else if (strcmp(fields[0], "H") == 0)
+            bstd_sprintf(account->api_hash, sizeof(account->api_hash), "%s", fields[1]);
     }
     fclose(file);
+    i_normalize_account(account);
     return account->jid[0] != '\0' || account->password[0] != '\0';
 }
 
@@ -809,7 +899,8 @@ static bool_t i_read_marker_account(const char_t *marker, CalAccount *account)
 {
     char_t path[1200];
 
-    if (marker == NULL || marker[0] == '\0' || i_state_path(path, sizeof(path), marker) == FALSE)
+    if (marker == NULL || marker[0] == '\0'
+        || i_state_path(path, sizeof(path), marker, account->protocol) == FALSE)
         return FALSE;
     return i_read_account_file(path, account);
 }
@@ -821,6 +912,7 @@ static void i_push_account(AccountStore *store, CalAccount *current, bool_t *hav
     {
         if (current->jid[0] != '\0' || current->password[0] != '\0')
         {
+            i_normalize_account(current);
             if (current->name[0] == '\0')
             {
                 i_account_default_name(current, current->name, sizeof(current->name));
@@ -843,6 +935,7 @@ static void i_legacy_start(CalAccount *current, bool_t *have_current, bool_t *le
     if (*have_current == FALSE)
     {
         bstd_sprintf(current->name, sizeof(current->name), "%s", "XMPP");
+        bstd_sprintf(current->protocol, sizeof(current->protocol), "%s", "XMPP");
         *have_current = TRUE;
         *legacy_json = TRUE;
     }
@@ -889,6 +982,12 @@ static bool_t i_load_account_store(AccountStore *store)
                 have_current = TRUE;
                 continue;
             }
+            if (i_json_read_string(line, "protocol", current.protocol,
+                                   sizeof(current.protocol)) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
+                continue;
+            }
             if (i_json_read_string(line, "jid", current.jid, sizeof(current.jid)) == TRUE)
             {
                 i_legacy_start(&current, &have_current, &legacy_json);
@@ -900,6 +999,17 @@ static bool_t i_load_account_store(AccountStore *store)
                 continue;
             }
             if (i_json_read_string(line, "server", current.server, sizeof(current.server)) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
+                continue;
+            }
+            if (i_json_read_string(line, "api_id", current.api_id, sizeof(current.api_id)) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
+                continue;
+            }
+            if (i_json_read_string(line, "api_hash", current.api_hash,
+                                   sizeof(current.api_hash)) == TRUE)
             {
                 i_legacy_start(&current, &have_current, &legacy_json);
                 continue;
@@ -969,10 +1079,16 @@ static bool_t i_apply_account(Backend *backend, const CalAccount *account)
 
     bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", account->name);
     bstd_sprintf(backend->account_marker, sizeof(backend->account_marker), "%s", account->name);
+    bstd_sprintf(backend->protocol, sizeof(backend->protocol), "%s",
+                 i_protocol_name(account->protocol));
     bstd_sprintf(backend->jid, sizeof(backend->jid), "%s", account->jid);
     bstd_sprintf(backend->password, sizeof(backend->password), "%s", account->password);
     bstd_sprintf(backend->server, sizeof(backend->server), "%s", account->server);
+    bstd_sprintf(backend->api_id, sizeof(backend->api_id), "%s", account->api_id);
+    bstd_sprintf(backend->api_hash, sizeof(backend->api_hash), "%s", account->api_hash);
     backend->auto_connect = account->auto_connect;
+    bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                 i_disconnected_text(backend->protocol));
     return TRUE;
 }
 
@@ -987,9 +1103,12 @@ static bool_t i_apply_active_account(Backend *backend)
     {
         bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", "Me");
         backend->account_marker[0] = '\0';
+        bstd_sprintf(backend->protocol, sizeof(backend->protocol), "%s", "XMPP");
         backend->jid[0] = '\0';
         backend->password[0] = '\0';
         backend->server[0] = '\0';
+        backend->api_id[0] = '\0';
+        backend->api_hash[0] = '\0';
         backend->auto_connect = FALSE;
         return TRUE;
     }
@@ -1015,6 +1134,8 @@ static bool_t i_save_active_account(const Backend *backend)
 
     memset(&account, 0, sizeof(account));
     bstd_sprintf(account.name, sizeof(account.name), "%s", backend->account_marker);
+    bstd_sprintf(account.protocol, sizeof(account.protocol), "%s", backend->protocol);
+    i_normalize_account(&account);
     if (account.name[0] == '\0')
         i_account_default_name(&account, account.name, sizeof(account.name));
 
@@ -1025,6 +1146,8 @@ static bool_t i_save_active_account(const Backend *backend)
     bstd_sprintf(account.jid, sizeof(account.jid), "%s", backend->jid);
     bstd_sprintf(account.password, sizeof(account.password), "%s", backend->password);
     bstd_sprintf(account.server, sizeof(account.server), "%s", backend->server);
+    bstd_sprintf(account.api_id, sizeof(account.api_id), "%s", backend->api_id);
+    bstd_sprintf(account.api_hash, sizeof(account.api_hash), "%s", backend->api_hash);
     if (index != CALANTAS_MAX_ACCOUNTS)
     {
         const CalAccount *saved = &store.accounts[index];
@@ -1035,6 +1158,10 @@ static bool_t i_save_active_account(const Backend *backend)
             bstd_sprintf(account.password, sizeof(account.password), "%s", saved->password);
         if (account.server[0] == '\0')
             bstd_sprintf(account.server, sizeof(account.server), "%s", saved->server);
+        if (account.api_id[0] == '\0')
+            bstd_sprintf(account.api_id, sizeof(account.api_id), "%s", saved->api_id);
+        if (account.api_hash[0] == '\0')
+            bstd_sprintf(account.api_hash, sizeof(account.api_hash), "%s", saved->api_hash);
     }
     account.auto_connect = backend->auto_connect;
 
@@ -1093,10 +1220,10 @@ Backend *cal_backend_create(void)
     Backend *backend = heap_new0(Backend);
 
     backend->xmpp = cal_xmpp_create();
+    backend->telegram = cal_telegram_create();
     backend->status = ekCAL_AVAILABLE;
     bstd_sprintf(backend->status_text, sizeof(backend->status_text), "%s", "Available with Calantas");
     bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", "Me");
-    bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s", "XMPP not connected");
     i_apply_active_account(backend);
     return backend;
 }
@@ -1107,6 +1234,7 @@ void cal_backend_destroy(Backend **backend)
         return;
 
     cal_xmpp_destroy(&(*backend)->xmpp);
+    cal_telegram_destroy(&(*backend)->telegram);
     heap_delete(backend, Backend);
 }
 
@@ -1115,21 +1243,62 @@ bool_t cal_backend_xmpp_available(void)
     return cal_xmpp_available();
 }
 
-bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *password, const char_t *server)
+bool_t cal_backend_telegram_available(void)
 {
-    if (backend == NULL || jid == NULL || jid[0] == '\0'
-        || password == NULL || password[0] == '\0')
+    return cal_telegram_available();
+}
+
+bool_t cal_backend_connect(Backend *backend, const char_t *protocol, const char_t *jid,
+                           const char_t *password, const char_t *server,
+                           const char_t *api_id, const char_t *api_hash)
+{
+    bool_t telegram;
+
+    if (backend == NULL || jid == NULL || jid[0] == '\0')
         return FALSE;
 
+    telegram = i_is_telegram(protocol);
+    if (telegram == FALSE && (password == NULL || password[0] == '\0'))
+        return FALSE;
+    if (telegram == TRUE && (api_id == NULL || api_id[0] == '\0'
+                             || api_hash == NULL || api_hash[0] == '\0'))
+    {
+        bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                     "Telegram needs an API ID and API hash");
+        return FALSE;
+    }
+
+    bstd_sprintf(backend->protocol, sizeof(backend->protocol), "%s",
+                 i_protocol_name(protocol));
     bstd_sprintf(backend->jid, sizeof(backend->jid), "%s", jid);
     bstd_sprintf(backend->server, sizeof(backend->server), "%s",
                  server != NULL ? server : "");
     bstd_sprintf(backend->password, sizeof(backend->password), "%s",
                  password != NULL ? password : "");
+    bstd_sprintf(backend->api_id, sizeof(backend->api_id), "%s",
+                 api_id != NULL ? api_id : "");
+    bstd_sprintf(backend->api_hash, sizeof(backend->api_hash), "%s",
+                 api_hash != NULL ? api_hash : "");
 
     i_save_active_account(backend);
     cal_backend_store(backend);
 
+    if (telegram == TRUE)
+    {
+        cal_xmpp_disconnect(backend->xmpp);
+        if (cal_telegram_connect(backend->telegram, jid, password,
+                                 api_id, api_hash) == FALSE)
+        {
+            bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                         "Telegram connection could not start");
+            return FALSE;
+        }
+        bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                     "Connecting to Telegram");
+        return TRUE;
+    }
+
+    cal_telegram_disconnect(backend->telegram);
     if (cal_xmpp_connect(backend->xmpp, jid, password, server) == FALSE)
     {
         bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
@@ -1138,14 +1307,19 @@ bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *pa
     }
     bstd_sprintf(backend->connection_text, sizeof(backend->connection_text),
                  "Connecting to %s", jid);
-
     return TRUE;
 }
 
-bool_t cal_backend_test_connection(const char_t *jid, const char_t *password, const char_t *server)
+bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
+                                   const char_t *password, const char_t *server,
+                                   const char_t *api_id, const char_t *api_hash)
 {
+    if (i_is_telegram(protocol) == TRUE)
+        return cal_telegram_test_connection(jid, password, api_id, api_hash);
     if (cal_backend_xmpp_available() == FALSE)
         return FALSE;
+    unref(api_id);
+    unref(api_hash);
     return cal_xmpp_test_connection(jid, password, server);
 }
 
@@ -1153,6 +1327,8 @@ bool_t cal_backend_is_connected(const Backend *backend)
 {
     if (backend == NULL)
         return FALSE;
+    if (i_is_telegram(backend->protocol) == TRUE)
+        return cal_telegram_is_connected(backend->telegram);
     return cal_xmpp_is_connected(backend->xmpp);
 }
 
@@ -1184,9 +1360,18 @@ bool_t cal_backend_add_buddy(Backend *backend, const char_t *name, const char_t 
     if (i_find_buddy(backend, handle) != CALANTAS_MAX_BUDDIES)
         return FALSE;
 
-    cal_xmpp_add_buddy(backend->xmpp, handle, name);
-
-    i_init_buddy(&backend->buddies[backend->count], name, handle, ekCAL_AVAILABLE, "XMPP buddy");
+    if (i_is_telegram(backend->protocol) == TRUE)
+    {
+        cal_telegram_add_buddy(backend->telegram, handle, name);
+        i_init_buddy(&backend->buddies[backend->count], name, handle, ekCAL_AVAILABLE,
+                     "Telegram chat");
+    }
+    else
+    {
+        cal_xmpp_add_buddy(backend->xmpp, handle, name);
+        i_init_buddy(&backend->buddies[backend->count], name, handle, ekCAL_AVAILABLE,
+                     "XMPP buddy");
+    }
     backend->count += 1;
     return TRUE;
 }
@@ -1202,8 +1387,15 @@ bool_t cal_backend_send(Backend *backend, const uint32_t index, const char_t *te
     if (buddy->status == ekCAL_OFFLINE)
         return FALSE;
 
-    if (cal_xmpp_send(backend->xmpp, buddy->handle, text) == FALSE)
+    if (i_is_telegram(backend->protocol) == TRUE)
+    {
+        if (cal_telegram_send(backend->telegram, buddy->handle, text) == FALSE)
+            return FALSE;
+    }
+    else if (cal_xmpp_send(backend->xmpp, buddy->handle, text) == FALSE)
+    {
         return FALSE;
+    }
     i_add_message(backend, index, TRUE, text);
     return TRUE;
 }
@@ -1235,7 +1427,10 @@ bool_t cal_backend_set_status(Backend *backend, const cal_status_t status, const
         text = "No status message";
     bstd_sprintf(backend->status_text, sizeof(backend->status_text), "%s", text);
 
-    cal_xmpp_set_status(backend->xmpp, status, backend->status_text);
+    if (i_is_telegram(backend->protocol) == TRUE)
+        cal_telegram_set_status(backend->telegram, status, backend->status_text);
+    else
+        cal_xmpp_set_status(backend->xmpp, status, backend->status_text);
     return TRUE;
 }
 
@@ -1278,6 +1473,21 @@ const char_t *cal_backend_account_server(const Backend *backend)
 const char_t *cal_backend_account_password(const Backend *backend)
 {
     return backend != NULL ? backend->password : "";
+}
+
+const char_t *cal_backend_protocol(const Backend *backend)
+{
+    return backend != NULL ? backend->protocol : "XMPP";
+}
+
+const char_t *cal_backend_api_id(const Backend *backend)
+{
+    return backend != NULL ? backend->api_id : "";
+}
+
+const char_t *cal_backend_api_hash(const Backend *backend)
+{
+    return backend != NULL ? backend->api_hash : "";
 }
 
 bool_t cal_backend_set_auto_connect(Backend *backend, const bool_t auto_connect)
@@ -1334,6 +1544,7 @@ bool_t cal_backend_account_save(const CalAccount *account, const bool_t activate
         return FALSE;
 
     copy = *account;
+    i_normalize_account(&copy);
     if (copy.name[0] == '\0')
         i_account_default_name(&copy, copy.name, sizeof(copy.name));
 
@@ -1384,6 +1595,7 @@ bool_t cal_backend_account_replace(const char_t *old_name, const CalAccount *acc
         return FALSE;
 
     copy = *account;
+    i_normalize_account(&copy);
     if (copy.name[0] == '\0')
         i_account_default_name(&copy, copy.name, sizeof(copy.name));
 
@@ -1465,6 +1677,7 @@ bool_t cal_backend_poll(Backend *backend, CalEvent *event)
         return FALSE;
 
     i_poll_xmpp_events(backend);
+    i_poll_telegram_events(backend);
 
     if (backend->event_head == backend->event_tail)
         return FALSE;
@@ -1481,7 +1694,8 @@ bool_t cal_backend_store(const Backend *backend)
     uint32_t i;
     uint32_t j;
 
-    if (backend == NULL || i_state_path(path, (uint32_t)sizeof(path), backend->account_marker) == FALSE)
+    if (backend == NULL || i_state_path(path, (uint32_t)sizeof(path), backend->account_marker,
+                                        backend->protocol) == FALSE)
         return FALSE;
 
     file = fopen(path, "wb");
@@ -1489,9 +1703,12 @@ bool_t cal_backend_store(const Backend *backend)
         return FALSE;
 
     i_write_string(file, "K|", backend->account_marker);
+    i_write_string(file, "T|", backend->protocol);
     i_write_string(file, "J|", backend->jid);
     i_write_string(file, "P|", backend->password);
     i_write_string(file, "R|", backend->server);
+    i_write_string(file, "I|", backend->api_id);
+    i_write_string(file, "H|", backend->api_hash);
     fprintf(file, "C|%u|\n", backend->auto_connect == TRUE ? 1u : 0u);
     i_write_string(file, "A|", backend->account_name);
     fprintf(file, "S|%u|", (unsigned)backend->status);
@@ -1540,7 +1757,8 @@ bool_t cal_backend_restore(Backend *backend)
     char_t fields[8][CAL_FIELD_MAX];
     FILE *file;
 
-    if (backend == NULL || i_state_path(path, (uint32_t)sizeof(path), backend->account_marker) == FALSE)
+    if (backend == NULL || i_state_path(path, (uint32_t)sizeof(path), backend->account_marker,
+                                        backend->protocol) == FALSE)
         return FALSE;
 
     file = fopen(path, "rb");
@@ -1607,7 +1825,7 @@ bool_t cal_backend_restore(Backend *backend)
     fclose(file);
     i_apply_active_account(backend);
     if (backend->jid[0] != '\0')
-        bstd_sprintf(backend->connection_text, sizeof(backend->connection_text),
-                     "XMPP not connected");
+        bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                     i_disconnected_text(backend->protocol));
     return TRUE;
 }
