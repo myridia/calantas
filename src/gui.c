@@ -517,7 +517,23 @@ static void i_OnAccountOk(Account *form, Event *e)
     bstd_sprintf(server, sizeof(server), "%s", server_text != NULL ? server_text : "");
 
     if (name[0] == '\0')
-        bstd_sprintf(name, sizeof(name), "%s", "XMPP");
+    {
+        const char_t *at = strchr(jid, '@');
+
+        if (at != NULL && at > jid)
+        {
+            uint32_t n = (uint32_t)(at - jid);
+
+            if (n >= sizeof(name) - 1)
+                n = (uint32_t)sizeof(name) - 1;
+            memcpy(name, jid, n);
+            name[n] = '\0';
+        }
+        else
+        {
+            bstd_sprintf(name, sizeof(name), "%s", "XMPP");
+        }
+    }
 
     if (jid[0] == '\0' || password[0] == '\0')
     {
@@ -563,7 +579,12 @@ static void i_OnAccountOk(Account *form, Event *e)
     else
         i_set_status(app, cal_backend_connection_text(app->backend));
 
-    label_text(form->result, "Saved to account.json.");
+    {
+        char_t saved[128];
+
+        bstd_sprintf(saved, sizeof(saved), "Saved to account.json as %s.", name);
+        label_text(form->result, saved);
+    }
     form->accepted = TRUE;
     window_stop_modal(form->window, 1);
     unref(e);
@@ -644,7 +665,7 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     window_title(window, title);
     label_text(protocol_label, "Protocol:");
     label_text(protocol, "XMPP");
-    label_text(name_label, "Account marker:");
+    label_text(name_label, "Account name:");
     label_text(jid_label, "JID:");
     label_text(password_label, "Password:");
     label_text(server_label, "Server:");
@@ -732,7 +753,9 @@ static void i_manager_refresh(AccountManager *form)
     for (i = 0; i < form->count; i += 1)
     {
         const char_t *name = form->accounts[i].name[0] != '\0'
-                                 ? form->accounts[i].name : "(unnamed)";
+                                 ? form->accounts[i].name
+                                 : (form->accounts[i].jid[0] != '\0'
+                                        ? form->accounts[i].jid : "XMPP");
 
         if (active != NULL && active[0] != '\0' && strcmp(active, form->accounts[i].name) == 0)
             bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "* %s", name);
@@ -938,6 +961,8 @@ static void i_OnManagerDelete(AccountManager *form, Event *e)
 
     label_text(form->status, "Deleting...");
     row = i_manager_selected(form);
+    if (row == CALANTAS_MAX_ACCOUNTS && form->count > 0)
+        row = 0;
     if (row == CALANTAS_MAX_ACCOUNTS)
     {
         label_text(form->status, "Select an account to delete.");
