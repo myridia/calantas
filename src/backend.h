@@ -62,6 +62,8 @@ typedef struct _cal_account_t
 
 typedef struct _backend_t Backend;
 
+typedef void (*CalTestLog)(const char_t *text, void *context);
+
 Backend *cal_backend_create(void);
 void cal_backend_destroy(Backend **backend);
 bool_t cal_backend_xmpp_available(void);
@@ -72,6 +74,10 @@ bool_t cal_backend_connect(Backend *backend, const char_t *protocol, const char_
 bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
                                    const char_t *password, const char_t *server,
                                    const char_t *api_id, const char_t *api_hash);
+bool_t cal_backend_test_connection_logged(const char_t *protocol, const char_t *jid,
+                                          const char_t *password, const char_t *server,
+                                          const char_t *api_id, const char_t *api_hash,
+                                          CalTestLog log, void *context);
 bool_t cal_backend_is_connected(const Backend *backend);
 const char_t *cal_backend_connection_text(const Backend *backend);
 uint32_t cal_backend_buddy_count(const Backend *backend);

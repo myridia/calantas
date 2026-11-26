@@ -49,6 +49,9 @@ bool_t cal_telegram_connect(TelegramBackend *backend, const char_t *identity,
                             const char_t *api_hash);
 bool_t cal_telegram_test_connection(const char_t *identity, const char_t *password,
                                     const char_t *api_id, const char_t *api_hash);
+bool_t cal_telegram_test_connection_logged(const char_t *identity, const char_t *password,
+                                           const char_t *api_id, const char_t *api_hash,
+                                           CalTestLog log, void *context);
 bool_t cal_telegram_is_connected(const TelegramBackend *backend);
 bool_t cal_telegram_pop_event(TelegramBackend *backend, CalTelegramEvent *event);
 bool_t cal_telegram_send(TelegramBackend *backend, const char_t *chat_id, const char_t *text);

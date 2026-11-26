@@ -6,6 +6,26 @@ option(CALANTAS_REQUIRE_XMPP "Fail configuration when libstrophe is missing" OFF
 option(CALANTAS_ENABLE_TELEGRAM "Build the Telegram backend when TDLib is available" ON)
 option(CALANTAS_REQUIRE_TELEGRAM "Fail configuration when TDLib is missing" OFF)
 
+set(CALANTAS_TELEGRAM_APP_CONFIG "${CMAKE_SOURCE_DIR}/telegram-app.json")
+set(CALANTAS_TELEGRAM_APP_API_ID "")
+set(CALANTAS_TELEGRAM_APP_API_HASH "")
+if(EXISTS "${CALANTAS_TELEGRAM_APP_CONFIG}")
+  file(READ "${CALANTAS_TELEGRAM_APP_CONFIG}" CALANTAS_TELEGRAM_APP_JSON)
+  string(REGEX MATCH "\"api_id\"[ \t\r\n]*:[ \t\r\n]*\"?([0-9]+)" CALANTAS_TELEGRAM_APP_ID_MATCH "${CALANTAS_TELEGRAM_APP_JSON}")
+  set(CALANTAS_TELEGRAM_APP_API_ID "${CMAKE_MATCH_1}")
+  string(REGEX MATCH "\"api_hash\"[ \t\r\n]*:[ \t\r\n]*\"([0-9a-fA-F]+)\"" CALANTAS_TELEGRAM_APP_HASH_MATCH "${CALANTAS_TELEGRAM_APP_JSON}")
+  set(CALANTAS_TELEGRAM_APP_API_HASH "${CMAKE_MATCH_1}")
+  string(LENGTH "${CALANTAS_TELEGRAM_APP_API_HASH}" CALANTAS_TELEGRAM_APP_HASH_LENGTH)
+  if(CALANTAS_TELEGRAM_APP_API_ID STREQUAL ""
+      OR CALANTAS_TELEGRAM_APP_API_ID STREQUAL "0"
+      OR NOT CALANTAS_TELEGRAM_APP_HASH_LENGTH EQUAL 32)
+    message(FATAL_ERROR "Invalid telegram-app.json. Copy telegram-app.example.json and set a numeric api_id and a 32-character hex api_hash.")
+  endif()
+  message(STATUS "Telegram app config: loaded from telegram-app.json")
+else()
+  message(STATUS "Telegram app config: not found; copy telegram-app.example.json to telegram-app.json")
+endif()
+
 if(DEFINED ENV{NAPPGUI_DIR})
   set(nappgui_DIR "$ENV{NAPPGUI_DIR}/cmake" CACHE PATH "NAppGUI cmake directory")
 elseif(WIN32)
@@ -23,6 +43,7 @@ include("${NAPPGUI_ROOT_PATH}/prj/NAppProject.cmake")
 include("${NAPPGUI_ROOT_PATH}/prj/NAppCompilers.cmake")
 
 set(CALANTAS_XMPP_TARGET "")
+set(CALANTAS_XMPP_RPATH "")
 
 if(CALANTAS_ENABLE_XMPP)
   find_package(PkgConfig QUIET)
@@ -32,6 +53,7 @@ if(CALANTAS_ENABLE_XMPP)
 
   if(TARGET PkgConfig::PC_STROPHE)
     set(CALANTAS_XMPP_TARGET PkgConfig::PC_STROPHE)
+    set(CALANTAS_XMPP_RPATH "${PC_STROPHE_LIBRARY_DIRS}")
   else()
     find_path(STROPHE_INCLUDE_DIR NAMES strophe.h)
     find_library(STROPHE_LIBRARY NAMES strophe libstrophe)
@@ -48,6 +70,7 @@ if(CALANTAS_ENABLE_XMPP)
         IMPORTED_LOCATION "${STROPHE_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${STROPHE_INCLUDE_DIR}"
         INTERFACE_LINK_LIBRARIES "${STROPHE_EXTRA_LIBS}")
+      get_filename_component(CALANTAS_XMPP_RPATH "${STROPHE_LIBRARY}" DIRECTORY)
       set(CALANTAS_XMPP_TARGET calantas_libstrophe)
     endif()
   endif()
@@ -68,6 +91,7 @@ else()
 endif()
 
 set(CALANTAS_TELEGRAM_TARGET "")
+set(CALANTAS_TELEGRAM_RPATH "")
 
 if(CALANTAS_ENABLE_TELEGRAM)
   find_package(PkgConfig QUIET)
@@ -77,6 +101,7 @@ if(CALANTAS_ENABLE_TELEGRAM)
 
   if(TARGET PkgConfig::PC_TDJSON)
     set(CALANTAS_TELEGRAM_TARGET PkgConfig::PC_TDJSON)
+    set(CALANTAS_TELEGRAM_RPATH "${PC_TDJSON_LIBRARY_DIRS}")
   else()
     find_library(TDJSON_LIBRARY NAMES tdjson libtdjson)
     if(TDJSON_LIBRARY)
@@ -97,6 +122,7 @@ if(CALANTAS_ENABLE_TELEGRAM)
       set_target_properties(calantas_tdjson PROPERTIES
         IMPORTED_LOCATION "${TDJSON_LIBRARY}"
         INTERFACE_LINK_LIBRARIES "${TDJSON_EXTRA_LIBS}")
+      get_filename_component(CALANTAS_TELEGRAM_RPATH "${TDJSON_LIBRARY}" DIRECTORY)
       set(CALANTAS_TELEGRAM_TARGET calantas_tdjson)
     endif()
   endif()

@@ -107,7 +107,7 @@ Rules:
    - Poll updates on a worker/ticker boundary.
    - Phone/bot-token/code/2FA login; the password field accepts `code` or `code:2FA-password`.
    - Contacts, chats and text messages.
-   - Temporary real connection test with a separate TDLib test database.
+   - Temporary real connection test with a separate per-identity TDLib test database.
    - Optional build: the app builds without `tdjson` but cannot connect to Telegram.
 
 7. Add ActivityPub via Mastodon-compatible API.

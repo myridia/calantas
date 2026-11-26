@@ -10,6 +10,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(CALANTAS_TELEGRAM_APP_API_ID) && defined(CALANTAS_TELEGRAM_APP_API_HASH)
+#define CALANTAS_HAVE_BAKED_TELEGRAM_APP 1
+#endif
+
 #define CAL_MAX_CHATS CALANTAS_MAX_BUDDIES
 
 typedef struct _chat_t Chat;
@@ -36,21 +40,21 @@ struct _account_t
 {
     App *app;
     Window *window;
-    Combo *protocol;
+    Button *bot_mode;
+    const char_t *protocol;
     Edit *name;
     Edit *jid;
     Edit *password;
     Edit *server;
-    Edit *api_id;
-    Edit *api_hash;
     Edit *status;
     Button *auto_connect;
     Label *identity_label;
     Label *password_label;
     Label *server_label;
-    Label *api_id_label;
-    Label *api_hash_label;
     Label *result;
+    TextView *log;
+    char_t api_id[32];
+    char_t api_hash[64];
     char_t original[64];
     bool_t is_new;
     bool_t accepted;
@@ -88,7 +92,6 @@ struct _app_t
     TableView *table;
     Edit *filter;
     Label *status;
-    Label *account;
     Button *message;
     Button *add;
     uint32_t *rows;
@@ -99,15 +102,141 @@ struct _app_t
     Chat *chats[CAL_MAX_CHATS];
 };
 
+static void i_account_log(Account *form, const char_t *text)
+{
+    char_t line[640];
+    char_t stamp[32];
+    struct tm *nowtm;
+    time_t now;
+
+    if (form == NULL || form->log == NULL || text == NULL)
+        return;
+    now = time(NULL);
+    nowtm = localtime(&now);
+    if (nowtm != NULL)
+        strftime(stamp, sizeof(stamp), "%H:%M:%S", nowtm);
+    else
+        bstd_sprintf(stamp, sizeof(stamp), "--:--:--");
+    bstd_sprintf(line, sizeof(line), "[%s] %s\n", stamp, text);
+    textview_printf(form->log, "%s", line);
+    textview_scroll_caret(form->log);
+}
+
+static void i_account_test_log(const char_t *text, void *context)
+{
+    i_account_log((Account *)context, text);
+}
+
+static void i_mask_identity(const char_t *text, char_t *out, const uint32_t size)
+{
+    size_t length;
+
+    if (out == NULL || size == 0)
+        return;
+    out[0] = '\0';
+    if (text == NULL)
+        return;
+    length = strlen(text);
+    if (length <= 6)
+        bstd_sprintf(out, size, "%s", text);
+    else
+        bstd_sprintf(out, size, "%.3s***%s", text, text + length - 4);
+}
+
+static bool_t i_valid_telegram_api_id(const char_t *text)
+{
+    bool_t nonzero;
+    size_t i;
+    size_t length;
+
+    if (text == NULL)
+        return FALSE;
+    length = strlen(text);
+    if (length == 0 || length > 10)
+        return FALSE;
+    nonzero = FALSE;
+    for (i = 0; i < length; i += 1)
+    {
+        if (text[i] < '0' || text[i] > '9')
+            return FALSE;
+        if (text[i] != '0')
+            nonzero = TRUE;
+    }
+    return nonzero;
+}
+
+static bool_t i_valid_telegram_api_hash(const char_t *text)
+{
+    size_t i;
+    size_t length;
+
+    if (text == NULL)
+        return FALSE;
+    length = strlen(text);
+    if (length != 32)
+        return FALSE;
+    for (i = 0; i < length; i += 1)
+    {
+        if (isxdigit((unsigned char)text[i]) == 0)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static bool_t i_telegram_app_credentials(App *app, char_t *api_id, const uint32_t id_size,
+                                         char_t *api_hash, const uint32_t hash_size)
+{
+    CalAccount accounts[CALANTAS_MAX_ACCOUNTS];
+    uint32_t i;
+    uint32_t count;
+
+    if (api_id == NULL || api_hash == NULL)
+        return FALSE;
+
+#if defined(CALANTAS_HAVE_BAKED_TELEGRAM_APP)
+    if (i_valid_telegram_api_id(CALANTAS_TELEGRAM_APP_API_ID) == TRUE
+        && i_valid_telegram_api_hash(CALANTAS_TELEGRAM_APP_API_HASH) == TRUE)
+    {
+        bstd_sprintf(api_id, id_size, "%s", CALANTAS_TELEGRAM_APP_API_ID);
+        bstd_sprintf(api_hash, hash_size, "%s", CALANTAS_TELEGRAM_APP_API_HASH);
+        return TRUE;
+    }
+#endif
+
+    count = cal_backend_accounts(accounts, CALANTAS_MAX_ACCOUNTS);
+    for (i = 0; i < count; i += 1)
+    {
+        if (strcmp(accounts[i].protocol, "Telegram") == 0
+            && i_valid_telegram_api_id(accounts[i].api_id) == TRUE
+            && i_valid_telegram_api_hash(accounts[i].api_hash) == TRUE)
+        {
+            bstd_sprintf(api_id, id_size, "%s", accounts[i].api_id);
+            bstd_sprintf(api_hash, hash_size, "%s", accounts[i].api_hash);
+            return TRUE;
+        }
+    }
+
+    if (app != NULL && strcmp(cal_backend_protocol(app->backend), "Telegram") == 0
+        && i_valid_telegram_api_id(cal_backend_api_id(app->backend)) == TRUE
+        && i_valid_telegram_api_hash(cal_backend_api_hash(app->backend)) == TRUE)
+    {
+        bstd_sprintf(api_id, id_size, "%s", cal_backend_api_id(app->backend));
+        bstd_sprintf(api_hash, hash_size, "%s", cal_backend_api_hash(app->backend));
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 static void i_set_status(App *app, const char_t *text)
 {
     char_t line[256];
+    char_t combined[512];
     const char_t *jid;
     const char_t *marker;
     const char_t *name;
 
     cassert_no_null(app);
-    label_text(app->status, text != NULL ? text : "");
     jid = cal_backend_account_jid(app->backend);
     marker = cal_backend_active_account(app->backend);
     name = cal_backend_account_name(app->backend);
@@ -130,7 +259,8 @@ static void i_set_status(App *app, const char_t *text)
         bstd_sprintf(line, sizeof(line), "%s - %s", name,
                      cal_backend_status_text(app->backend));
     }
-    label_text(app->account, line);
+    bstd_sprintf(combined, sizeof(combined), "%s\n%s", line, text != NULL ? text : "");
+    label_text(app->status, combined);
 }
 
 static uint32_t i_chat_index(App *app, Chat *chat)
@@ -527,11 +657,6 @@ static uint32_t i_protocol_index(const char_t *protocol)
     return i == 8 ? 1 : 0;
 }
 
-static const char_t *i_protocol_from_index(const uint32_t index)
-{
-    return index == 1 ? "Telegram" : "XMPP";
-}
-
 static const char_t *i_protocol_name(const char_t *protocol)
 {
     return i_protocol_index(protocol) == 1 ? "Telegram" : "XMPP";
@@ -539,73 +664,160 @@ static const char_t *i_protocol_name(const char_t *protocol)
 
 static bool_t i_form_telegram(const Account *form)
 {
-    return form != NULL && combo_get_selected(form->protocol) == 1 ? TRUE : FALSE;
+    return form != NULL && form->protocol != NULL
+               && i_protocol_index(form->protocol) == 1 ? TRUE : FALSE;
 }
 
-static void i_update_account_fields(Account *form)
+static bool_t i_telegram_bot_mode(const Account *form)
 {
-    bool_t telegram = i_form_telegram(form);
-
-    label_text(form->identity_label, telegram == TRUE ? "Phone or bot token:" : "JID:");
-    label_text(form->password_label, telegram == TRUE ? "Code / 2FA:" : "Password:");
-    label_text(form->server_label, telegram == TRUE ? "Server (unused):" : "Server:");
-    label_text(form->api_id_label, telegram == TRUE ? "Telegram API ID:" : "API ID:");
-    label_text(form->api_hash_label, telegram == TRUE ? "Telegram API hash:" : "API hash:");
-    edit_phtext(form->jid, telegram == TRUE ? "+15551234567 or 123456:TOKEN"
-                                           : "user@example.org");
-    edit_phtext(form->password, telegram == TRUE ? "123456 or 123456:2FA"
-                                                 : "Saved in account.json");
-    edit_phtext(form->api_id, telegram == TRUE ? "From my.telegram.org/apps" : "Not used by XMPP");
-    edit_phtext(form->api_hash, telegram == TRUE ? "From my.telegram.org/apps" : "Not used by XMPP");
-    edit_editable(form->api_id, telegram == TRUE ? TRUE : FALSE);
-    edit_editable(form->api_hash, telegram == TRUE ? TRUE : FALSE);
-    button_text(form->auto_connect,
-                telegram == TRUE ? "Connect automatically on startup (Telegram)"
-                                 : "Connect automatically on startup (XMPP)");
+    return form != NULL && form->bot_mode != NULL
+               && button_get_state(form->bot_mode) == ekGUI_ON ? TRUE : FALSE;
 }
 
-static void i_OnProtocolChange(Account *form, Event *e)
+static void i_update_telegram_fields(Account *form)
 {
-    i_update_account_fields(form);
+    bool_t bot = i_telegram_bot_mode(form);
+
+    label_text(form->identity_label, bot == TRUE ? "Bot token:" : "Phone number:");
+    edit_phtext(form->jid, bot == TRUE ? "123456:TOKEN" : "+66812345678");
+    label_text(form->password_label, bot == TRUE ? "Not used:" : "Login code / 2FA:");
+    edit_phtext(form->password, bot == TRUE ? "Leave empty" : "Enter after Test");
+    edit_editable(form->password, bot == FALSE);
+    if (bot == TRUE)
+        edit_text(form->password, "");
+    label_text(form->result, bot == TRUE
+        ? "Paste the bot token from BotFather, then click Test Connection or Save."
+        : "1) Click Test Connection. 2) Enter the code Telegram sends. 3) Click Test Connection again.");
+}
+
+static void i_OnTelegramBotChange(Account *form, Event *e)
+{
+    i_update_telegram_fields(form);
+    i_account_log(form, i_telegram_bot_mode(form) == TRUE
+                  ? "Identity mode changed to bot token."
+                  : "Identity mode changed to phone number.");
     unref(e);
 }
 
 static void i_OnTest(Account *form, Event *e)
 {
-    const char_t *protocol = i_protocol_from_index(combo_get_selected(form->protocol));
     const char_t *jid = edit_get_text(form->jid);
     const char_t *password = edit_get_text(form->password);
-    const char_t *server = edit_get_text(form->server);
-    const char_t *api_id = edit_get_text(form->api_id);
-    const char_t *api_hash = edit_get_text(form->api_hash);
+    const char_t *api_id = form->api_id;
+    const char_t *api_hash = form->api_hash;
+    bool_t telegram = i_form_telegram(form);
+    char_t line[320];
+    char_t identity[96];
 
-    if (jid == NULL || jid[0] == '\0')
-        label_text(form->result, "Enter an identity to test.");
-    else if (i_form_telegram(form) == TRUE)
+    i_account_log(form, "=== Test Connection clicked ===");
+    bstd_sprintf(line, sizeof(line), "Protocol: %s", form->protocol);
+    i_account_log(form, line);
+    if (telegram == TRUE)
     {
-        if (api_id == NULL || api_id[0] == '\0' || api_hash == NULL || api_hash[0] == '\0')
-            label_text(form->result, "Enter the Telegram API ID and API hash to test.");
-        else if (cal_backend_telegram_available() == FALSE)
-            label_text(form->result, "Telegram support is not available in this build.");
+        bstd_sprintf(line, sizeof(line), "Identity mode: %s",
+                     i_telegram_bot_mode(form) == TRUE ? "bot token" : "phone number");
+        i_account_log(form, line);
+        if (i_telegram_bot_mode(form) == TRUE)
+            i_account_log(form, "Identity: bot token hidden from log.");
         else
         {
+            i_mask_identity(jid, identity, sizeof(identity));
+            bstd_sprintf(line, sizeof(line), "Phone: %s", identity);
+            i_account_log(form, line);
+        }
+        i_account_log(form, i_valid_telegram_api_id(api_id) == TRUE
+                            && i_valid_telegram_api_hash(api_hash) == TRUE
+                                ? "Telegram app credentials: configured."
+                                : "Telegram app credentials: missing.");
+        bstd_sprintf(line, sizeof(line), "Login code supplied: %s",
+                     password != NULL && password[0] != '\0' ? "yes" : "no");
+        i_account_log(form, line);
+    }
+    else
+    {
+        i_mask_identity(jid, identity, sizeof(identity));
+        bstd_sprintf(line, sizeof(line), "JID: %s", identity);
+        i_account_log(form, line);
+    }
+
+    if (jid == NULL || jid[0] == '\0')
+    {
+        label_text(form->result, telegram == TRUE
+            ? "Enter a phone number or bot token to test."
+            : "Enter a JID to test.");
+        i_account_log(form, "Stopped: identity is empty.");
+    }
+    else if (telegram == TRUE)
+    {
+        if (i_valid_telegram_api_id(api_id) == FALSE)
+        {
+            label_text(form->result, "This build has no Telegram app API ID. Ask the builder to set telegram-app.json.");
+            i_account_log(form, "Stopped: API ID must be digits only and greater than zero.");
+        }
+        else if (i_valid_telegram_api_hash(api_hash) == FALSE)
+        {
+            label_text(form->result, "This build has no Telegram app API hash. Ask the builder to set telegram-app.json.");
+            i_account_log(form, "Stopped: API hash must be 32 hex characters.");
+        }
+        else if (cal_backend_telegram_available() == FALSE)
+        {
+            label_text(form->result, "Telegram support is not available in this build.");
+            i_account_log(form, "Stopped: this build has no Telegram backend.");
+        }
+        else
+        {
+            bool_t connected;
+
             label_text(form->result, "Testing connection...");
-            if (cal_backend_test_connection(protocol, jid, password, server,
-                                            api_id, api_hash) == TRUE)
+            i_account_log(form, "Calling TDLib test client; waiting up to 10 seconds.");
+            connected = cal_backend_test_connection_logged(form->protocol, jid, password, "",
+                                                           api_id, api_hash,
+                                                           i_account_test_log, form);
+            bstd_sprintf(line, sizeof(line), "Test client returned: %s.",
+                         connected == TRUE ? "connected" : "not connected");
+            i_account_log(form, line);
+            if (connected == TRUE)
+            {
                 label_text(form->result, "Connected.");
+                i_account_log(form, "Telegram test session authorized.");
+            }
+            else if (i_telegram_bot_mode(form) == TRUE)
+            {
+                label_text(form->result, "Bot login failed. Check the token and API ID/hash.");
+                i_account_log(form, "Bot authorization did not finish. Check token and API ID/hash.");
+            }
             else
-                label_text(form->result, "Connection failed, code required or timed out.");
+            {
+                label_text(form->result, "Code required? Enter it in Login code / 2FA and click Test Connection again.");
+                i_account_log(form, "Waiting for login code. Put it in Login code / 2FA and click Test Connection again.");
+            }
         }
     }
     else if (password == NULL || password[0] == '\0')
+    {
         label_text(form->result, "Enter JID and password to test.");
+        i_account_log(form, "Stopped: password is empty.");
+    }
     else if (cal_backend_xmpp_available() == FALSE)
+    {
         label_text(form->result, "XMPP support is not available in this build.");
+        i_account_log(form, "Stopped: this build has no XMPP backend.");
+    }
     else
     {
+        const char_t *server = form->server != NULL ? edit_get_text(form->server) : "";
+        bool_t connected;
+
         label_text(form->result, "Testing connection...");
-        if (cal_backend_test_connection(protocol, jid, password, server,
-                                        api_id, api_hash) == TRUE)
+        bstd_sprintf(line, sizeof(line), "Server: %s", server != NULL && server[0] != '\0' ? server : "(default)");
+        i_account_log(form, line);
+        connected = cal_backend_test_connection_logged(form->protocol, jid, password, server,
+                                                       api_id, api_hash,
+                                                       i_account_test_log, form);
+        bstd_sprintf(line, sizeof(line), "Test client returned: %s.",
+                     connected == TRUE ? "connected" : "not connected");
+        i_account_log(form, line);
+        if (connected == TRUE)
             label_text(form->result, "Connected.");
         else
             label_text(form->result, "Connection failed or timed out.");
@@ -620,10 +832,9 @@ static void i_OnAccountOk(Account *form, Event *e)
     const char_t *text = edit_get_text(form->status);
     const char_t *jid_text = edit_get_text(form->jid);
     const char_t *password_text = edit_get_text(form->password);
-    const char_t *server_text = edit_get_text(form->server);
-    const char_t *api_id_text = edit_get_text(form->api_id);
-    const char_t *api_hash_text = edit_get_text(form->api_hash);
-    const char_t *protocol = i_protocol_from_index(combo_get_selected(form->protocol));
+    const char_t *server_text = form->server != NULL ? edit_get_text(form->server) : "";
+    const char_t *api_id_text = form->api_id;
+    const char_t *api_hash_text = form->api_hash;
     CalAccount account;
     char_t name[64];
     char_t jid[128];
@@ -635,57 +846,75 @@ static void i_OnAccountOk(Account *form, Event *e)
     bool_t telegram = i_form_telegram(form);
     bool_t auto_connect = button_get_state(form->auto_connect) == ekGUI_ON;
     App *app = form->app;
+    char_t line[320];
+    char_t identity[96];
 
     bstd_sprintf(name, sizeof(name), "%s", name_text != NULL ? name_text : "");
     bstd_sprintf(jid, sizeof(jid), "%s", jid_text != NULL ? jid_text : "");
     bstd_sprintf(password, sizeof(password), "%s", password_text != NULL ? password_text : "");
     bstd_sprintf(server, sizeof(server), "%s", server_text != NULL ? server_text : "");
-    bstd_sprintf(api_id, sizeof(api_id), "%s", api_id_text != NULL && telegram == TRUE
-                                                    ? api_id_text : "");
-    bstd_sprintf(api_hash, sizeof(api_hash), "%s", api_hash_text != NULL && telegram == TRUE
-                                                      ? api_hash_text : "");
+    bstd_sprintf(api_id, sizeof(api_id), "%s", api_id_text != NULL ? api_id_text : "");
+    bstd_sprintf(api_hash, sizeof(api_hash), "%s", api_hash_text != NULL ? api_hash_text : "");
+    if (telegram == TRUE && i_telegram_bot_mode(form) == TRUE)
+        password[0] = '\0';
 
     if (name[0] == '\0')
+        bstd_sprintf(name, sizeof(name), "%s", form->protocol);
+
+    i_account_log(form, "=== Save clicked ===");
+    bstd_sprintf(line, sizeof(line), "Account name: %s", name);
+    i_account_log(form, line);
+    bstd_sprintf(line, sizeof(line), "Protocol: %s", form->protocol);
+    i_account_log(form, line);
+    if (telegram == TRUE && i_telegram_bot_mode(form) == TRUE)
+        i_account_log(form, "Identity: bot token hidden from log.");
+    else
     {
-        const char_t *at = strchr(jid, '@');
-
-        if (at != NULL && at > jid)
-        {
-            uint32_t n = (uint32_t)(at - jid);
-
-            if (n >= sizeof(name) - 1)
-                n = (uint32_t)sizeof(name) - 1;
-            memcpy(name, jid, n);
-            name[n] = '\0';
-        }
-        else
-        {
-            bstd_sprintf(name, sizeof(name), "%s", protocol);
-        }
+        i_mask_identity(jid, identity, sizeof(identity));
+        bstd_sprintf(line, sizeof(line), "Identity: %s", identity);
+        i_account_log(form, line);
     }
+    bstd_sprintf(line, sizeof(line), "Login code supplied: %s",
+                 password[0] != '\0' ? "yes" : "no");
+    i_account_log(form, line);
+    bstd_sprintf(line, sizeof(line), "Auto-connect: %s",
+                 auto_connect == TRUE ? "yes" : "no");
+    i_account_log(form, line);
 
     if (jid[0] == '\0')
     {
-        label_text(form->result, "Enter an identity before saving.");
+        label_text(form->result, telegram == TRUE
+            ? "Enter a phone number or bot token before saving."
+            : "Enter an identity before saving.");
+        i_account_log(form, "Stopped: identity is empty.");
         unref(e);
         return;
     }
-    if (telegram == TRUE && (api_id[0] == '\0' || api_hash[0] == '\0'))
+    if (telegram == TRUE && i_valid_telegram_api_id(api_id) == FALSE)
     {
-        label_text(form->result, "Enter the Telegram API ID and API hash before saving.");
+        label_text(form->result, "This build has no Telegram app API ID. Ask the builder to set telegram-app.json.");
+        i_account_log(form, "Stopped: API ID must be digits only and greater than zero.");
+        unref(e);
+        return;
+    }
+    if (telegram == TRUE && i_valid_telegram_api_hash(api_hash) == FALSE)
+    {
+        label_text(form->result, "This build has no Telegram app API hash. Ask the builder to set telegram-app.json.");
+        i_account_log(form, "Stopped: API hash must be 32 hex characters.");
         unref(e);
         return;
     }
     if (telegram == FALSE && password[0] == '\0')
     {
         label_text(form->result, "Enter JID and password before saving.");
+        i_account_log(form, "Stopped: password is empty.");
         unref(e);
         return;
     }
 
     memset(&account, 0, sizeof(account));
     bstd_sprintf(account.name, sizeof(account.name), "%s", name);
-    bstd_sprintf(account.protocol, sizeof(account.protocol), "%s", protocol);
+    bstd_sprintf(account.protocol, sizeof(account.protocol), "%s", form->protocol);
     bstd_sprintf(account.jid, sizeof(account.jid), "%s", jid);
     bstd_sprintf(account.password, sizeof(account.password), "%s", password);
     bstd_sprintf(account.server, sizeof(account.server), "%s", server);
@@ -693,11 +922,15 @@ static void i_OnAccountOk(Account *form, Event *e)
     bstd_sprintf(account.api_hash, sizeof(account.api_hash), "%s", api_hash);
     account.auto_connect = auto_connect;
 
+    i_account_log(form, form->is_new == TRUE
+                  ? "Writing new account to account.json."
+                  : "Updating existing account in account.json.");
     if (form->is_new == TRUE)
     {
         if (cal_backend_account_save(&account, TRUE) == FALSE)
         {
             label_text(form->result, "Could not save account.json.");
+            i_account_log(form, "Failed to write account.json.");
             unref(e);
             return;
         }
@@ -707,26 +940,35 @@ static void i_OnAccountOk(Account *form, Event *e)
         if (cal_backend_account_replace(form->original, &account, TRUE) == FALSE)
         {
             label_text(form->result, "Could not save account.json.");
+            i_account_log(form, "Failed to update account.json.");
             unref(e);
             return;
         }
     }
+    i_account_log(form, "account.json written successfully.");
 
+    bstd_sprintf(line, sizeof(line), "Selecting account: %s", name);
+    i_account_log(form, line);
     if (cal_backend_select_account(app->backend, name) == TRUE)
         i_rebuild_rows(app);
     cal_backend_set_account_name(app->backend, name);
     cal_backend_set_status(app->backend, cal_backend_status(app->backend), text);
     cal_backend_set_auto_connect(app->backend, auto_connect);
+    i_account_log(form, "Starting saved connection worker.");
 
-    if (cal_backend_connect(app->backend, protocol, jid, password, server,
+    if (cal_backend_connect(app->backend, form->protocol, jid, password, server,
                             api_id, api_hash) == TRUE)
     {
-        bstd_sprintf(connecting, sizeof(connecting), "%s account saved; connecting", protocol);
+        bstd_sprintf(connecting, sizeof(connecting), "%s account saved; connecting", form->protocol);
         i_set_status(app, connecting);
+        i_account_log(form, "Connection worker started.");
     }
     else
     {
         i_set_status(app, cal_backend_connection_text(app->backend));
+        bstd_sprintf(line, sizeof(line), "Connection worker did not start: %s",
+                     cal_backend_connection_text(app->backend));
+        i_account_log(form, line);
     }
 
     {
@@ -734,6 +976,7 @@ static void i_OnAccountOk(Account *form, Event *e)
 
         bstd_sprintf(saved, sizeof(saved), "Saved to account.json as %s.", name);
         label_text(form->result, saved);
+        i_account_log(form, saved);
     }
     form->accepted = TRUE;
     window_stop_modal(form->window, 1);
@@ -747,20 +990,16 @@ static void i_OnAccountCancel(Account *form, Event *e)
     unref(e);
 }
 
-static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *source,
-                                  const char_t *original, const bool_t is_new)
+static bool_t i_open_xmpp_form(App *app, Window *parent, const CalAccount *source,
+                               const char_t *original, const bool_t is_new)
 {
     Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
-    Layout *layout = layout_create(2, 11);
+    Layout *layout = layout_create(2, 9);
     Layout *buttons = layout_create(3, 1);
-    Label *protocol_label = label_create();
-    Combo *protocol = combo_create();
     Label *name_label = label_create();
     Label *jid_label = label_create();
     Label *password_label = label_create();
     Label *server_label = label_create();
-    Label *api_id_label = label_create();
-    Label *api_hash_label = label_create();
     Label *status_label = label_create();
     Label *result_label = label_create();
     Label *result = label_create();
@@ -768,8 +1007,6 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     Edit *jid = edit_create();
     Edit *password = edit_create();
     Edit *server = edit_create();
-    Edit *api_id = edit_create();
-    Edit *api_hash = edit_create();
     Edit *status = edit_create();
     Button *auto_connect = button_check();
     Button *test = button_push();
@@ -782,29 +1019,26 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     char_t jid_value[128];
     char_t password_value[128];
     char_t server_value[128];
-    char_t api_id_value[32];
-    char_t api_hash_value[64];
-    uint32_t protocol_index;
-    bool_t auto_value = FALSE;
+    uint32_t i;
     Account form;
 
     form.app = app;
     form.window = window;
-    form.protocol = protocol;
+    form.bot_mode = NULL;
+    form.protocol = "XMPP";
     form.name = name;
     form.jid = jid;
     form.password = password;
     form.server = server;
-    form.api_id = api_id;
-    form.api_hash = api_hash;
     form.status = status;
     form.auto_connect = auto_connect;
     form.identity_label = jid_label;
     form.password_label = password_label;
     form.server_label = server_label;
-    form.api_id_label = api_id_label;
-    form.api_hash_label = api_hash_label;
     form.result = result;
+    form.log = NULL;
+    bstd_sprintf(form.api_id, sizeof(form.api_id), "%s", "");
+    bstd_sprintf(form.api_hash, sizeof(form.api_hash), "%s", "");
     form.is_new = is_new;
     form.accepted = FALSE;
     bstd_sprintf(form.original, sizeof(form.original), "%s",
@@ -816,29 +1050,21 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     else if (is_new == FALSE
              && cal_backend_account_get(cal_backend_active_account(app->backend), &copy) == FALSE)
         memset(&copy, 0, sizeof(copy));
-
-    if (copy.protocol[0] == '\0')
-        bstd_sprintf(copy.protocol, sizeof(copy.protocol), "%s",
-                     cal_backend_protocol(app->backend));
+    bstd_sprintf(copy.protocol, sizeof(copy.protocol), "%s", "XMPP");
     if (copy.name[0] == '\0')
-        bstd_sprintf(copy.name, sizeof(copy.name), "%s",
-                     i_protocol_name(copy.protocol));
-    protocol_index = i_protocol_index(copy.protocol);
+        bstd_sprintf(copy.name, sizeof(copy.name), "%s", "XMPP");
     bstd_sprintf(name_value, sizeof(name_value), "%s", copy.name);
     bstd_sprintf(jid_value, sizeof(jid_value), "%s", copy.jid);
     bstd_sprintf(password_value, sizeof(password_value), "%s", copy.password);
     bstd_sprintf(server_value, sizeof(server_value), "%s", copy.server);
-    bstd_sprintf(api_id_value, sizeof(api_id_value), "%s", copy.api_id);
-    bstd_sprintf(api_hash_value, sizeof(api_hash_value), "%s", copy.api_hash);
-    auto_value = copy.auto_connect;
 
-    bstd_sprintf(title, sizeof(title), "%s", is_new == TRUE ? "Add Account" : "Edit Account");
+    bstd_sprintf(title, sizeof(title), "%s",
+                 is_new == TRUE ? "Add XMPP account" : "Edit XMPP account");
     window_title(window, title);
-    label_text(protocol_label, "Protocol:");
-    combo_add_elem(protocol, "XMPP", NULL);
-    combo_add_elem(protocol, "Telegram", NULL);
-    combo_selected(protocol, protocol_index);
     label_text(name_label, "Account name:");
+    label_text(jid_label, "JID:");
+    label_text(password_label, "Password:");
+    label_text(server_label, "Server:");
     label_text(status_label, "Status:");
     label_text(result_label, "Result:");
     label_text(result, "Not tested");
@@ -848,48 +1074,36 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     edit_text(jid, jid_value);
     edit_text(password, password_value);
     edit_text(server, server_value);
-    edit_text(api_id, api_id_value);
-    edit_text(api_hash, api_hash_value);
     edit_text(status, cal_backend_status_text(app->backend));
     edit_passmode(password, TRUE);
-    button_state(auto_connect, auto_value == TRUE ? ekGUI_ON : ekGUI_OFF);
+    button_state(auto_connect, copy.auto_connect == TRUE ? ekGUI_ON : ekGUI_OFF);
     edit_width(name, 320);
     edit_width(jid, 320);
     edit_width(password, 320);
     edit_width(server, 320);
-    edit_width(api_id, 320);
-    edit_width(api_hash, 320);
     edit_width(status, 320);
-
-    button_text(test, "Test");
+    button_text(auto_connect, "Connect automatically on startup");
+    button_text(test, "Test Connection");
     button_text(save, "Save");
     button_text(cancel, "Cancel");
     button_OnClick(test, listener(&form, i_OnTest, Account));
     button_OnClick(save, listener(&form, i_OnAccountOk, Account));
     button_OnClick(cancel, listener(&form, i_OnAccountCancel, Account));
-    combo_OnChange(protocol, listener(&form, i_OnProtocolChange, Account));
-    i_update_account_fields(&form);
 
-    layout_label(layout, protocol_label, 0, 0);
-    layout_combo(layout, protocol, 1, 0);
-    layout_label(layout, name_label, 0, 1);
-    layout_edit(layout, name, 1, 1);
-    layout_label(layout, jid_label, 0, 2);
-    layout_edit(layout, jid, 1, 2);
-    layout_label(layout, password_label, 0, 3);
-    layout_edit(layout, password, 1, 3);
-    layout_label(layout, server_label, 0, 4);
-    layout_edit(layout, server, 1, 4);
-    layout_label(layout, api_id_label, 0, 5);
-    layout_edit(layout, api_id, 1, 5);
-    layout_label(layout, api_hash_label, 0, 6);
-    layout_edit(layout, api_hash, 1, 6);
-    layout_label(layout, status_label, 0, 7);
-    layout_edit(layout, status, 1, 7);
-    layout_label(layout, result_label, 0, 8);
-    layout_label(layout, result, 1, 8);
-    layout_button(layout, auto_connect, 1, 9);
-    layout_layout(layout, buttons, 1, 10);
+    layout_label(layout, name_label, 0, 0);
+    layout_edit(layout, name, 1, 0);
+    layout_label(layout, jid_label, 0, 1);
+    layout_edit(layout, jid, 1, 1);
+    layout_label(layout, password_label, 0, 2);
+    layout_edit(layout, password, 1, 2);
+    layout_label(layout, server_label, 0, 3);
+    layout_edit(layout, server, 1, 3);
+    layout_label(layout, status_label, 0, 4);
+    layout_edit(layout, status, 1, 4);
+    layout_label(layout, result_label, 0, 5);
+    layout_label(layout, result, 1, 5);
+    layout_button(layout, auto_connect, 1, 6);
+    layout_layout(layout, buttons, 1, 7);
     layout_button(buttons, test, 0, 0);
     layout_button(buttons, save, 1, 0);
     layout_button(buttons, cancel, 2, 0);
@@ -897,23 +1111,164 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     layout_halign(buttons, 0, 0, ekLEFT);
     layout_hmargin(buttons, 0, 6);
     layout_hmargin(buttons, 1, 6);
-    layout_vmargin(layout, 0, 8);
-    layout_vmargin(layout, 1, 8);
-    layout_vmargin(layout, 2, 8);
-    layout_vmargin(layout, 3, 8);
-    layout_vmargin(layout, 4, 8);
-    layout_vmargin(layout, 5, 8);
-    layout_vmargin(layout, 6, 8);
-    layout_vmargin(layout, 7, 8);
-    layout_vmargin(layout, 8, 8);
-    layout_vmargin(layout, 9, 8);
+    for (i = 0; i < 8; i += 1)
+        layout_vmargin(layout, i, 8);
     layout_margin(layout, 14);
 
     panel_layout(panel, layout);
     window_panel(window, panel);
-    window_client_size(window, s2df(560, 560));
+    window_client_size(window, s2df(560, 440));
     window_defbutton(window, save);
+    window_modal(window, parent != NULL ? parent : app->window);
+    window_destroy(&window);
 
+    return form.accepted;
+}
+
+static bool_t i_open_telegram_form(App *app, Window *parent, const CalAccount *source,
+                                   const char_t *original, const bool_t is_new)
+{
+    Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
+    Layout *layout = layout_create(2, 9);
+    Layout *buttons = layout_create(3, 1);
+    Label *name_label = label_create();
+    Label *identity_label = label_create();
+    Label *code_label = label_create();
+    Label *status_label = label_create();
+    Label *result_label = label_create();
+    Label *result = label_create();
+    Label *log_label = label_create();
+    TextView *log = textview_create();
+    Edit *name = edit_create();
+    Edit *jid = edit_create();
+    Edit *password = edit_create();
+    Edit *status = edit_create();
+    Button *bot_mode = button_check();
+    Button *auto_connect = button_check();
+    Button *test = button_push();
+    Button *save = button_push();
+    Button *cancel = button_push();
+    Panel *panel = panel_create();
+    CalAccount copy;
+    char_t title[128];
+    char_t name_value[64];
+    char_t jid_value[128];
+    char_t password_value[128];
+    uint32_t i;
+    Account form;
+
+    form.app = app;
+    form.window = window;
+    form.bot_mode = bot_mode;
+    form.protocol = "Telegram";
+    form.name = name;
+    form.jid = jid;
+    form.password = password;
+    form.server = NULL;
+    form.status = status;
+    form.auto_connect = auto_connect;
+    form.identity_label = identity_label;
+    form.password_label = code_label;
+    form.server_label = NULL;
+    form.result = result;
+    form.log = log;
+    form.is_new = is_new;
+    form.accepted = FALSE;
+    bstd_sprintf(form.original, sizeof(form.original), "%s",
+                 original != NULL ? original : "");
+
+    memset(&copy, 0, sizeof(copy));
+    if (source != NULL && source->name[0] != '\0')
+        copy = *source;
+    else if (is_new == FALSE
+             && cal_backend_account_get(cal_backend_active_account(app->backend), &copy) == FALSE)
+        memset(&copy, 0, sizeof(copy));
+    bstd_sprintf(copy.protocol, sizeof(copy.protocol), "%s", "Telegram");
+    if (copy.name[0] == '\0')
+        bstd_sprintf(copy.name, sizeof(copy.name), "%s", "Telegram");
+    bstd_sprintf(name_value, sizeof(name_value), "%s", copy.name);
+    bstd_sprintf(jid_value, sizeof(jid_value), "%s", copy.jid);
+    bstd_sprintf(password_value, sizeof(password_value), "%s", copy.password);
+    bstd_sprintf(form.api_id, sizeof(form.api_id), "%s", copy.api_id);
+    bstd_sprintf(form.api_hash, sizeof(form.api_hash), "%s", copy.api_hash);
+    if (form.api_id[0] == '\0')
+        i_telegram_app_credentials(app, form.api_id, sizeof(form.api_id),
+                                   form.api_hash, sizeof(form.api_hash));
+
+    bstd_sprintf(title, sizeof(title), "%s",
+                 is_new == TRUE ? "Add Telegram account" : "Edit Telegram account");
+    window_title(window, title);
+    label_text(name_label, "Account name:");
+    label_text(status_label, "Status:");
+    label_text(result_label, "Result:");
+    label_text(log_label, "Activity log:");
+    label_multiline(result, TRUE);
+    label_width(result, 480);
+    textview_size(log, s2df(480, 240));
+    textview_editable(log, FALSE);
+    textview_wrap(log, TRUE);
+    textview_scroll_visible(log, FALSE, TRUE);
+    edit_text(name, name_value);
+    edit_text(jid, jid_value);
+    edit_text(password, password_value);
+    edit_text(status, cal_backend_status_text(app->backend));
+    edit_passmode(password, TRUE);
+    button_state(bot_mode, strchr(copy.jid, ':') != NULL && strchr(copy.jid, '+') == NULL
+                               ? ekGUI_ON : ekGUI_OFF);
+    button_state(auto_connect, copy.auto_connect == TRUE ? ekGUI_ON : ekGUI_OFF);
+    edit_width(name, 480);
+    edit_width(jid, 480);
+    edit_width(password, 480);
+    edit_width(status, 480);
+    button_text(bot_mode, "Use bot token instead of phone number");
+    button_text(auto_connect, "Connect automatically on startup");
+    button_text(test, "Test Connection");
+    button_text(save, "Save");
+    button_text(cancel, "Cancel");
+    button_OnClick(bot_mode, listener(&form, i_OnTelegramBotChange, Account));
+    button_OnClick(test, listener(&form, i_OnTest, Account));
+    button_OnClick(save, listener(&form, i_OnAccountOk, Account));
+    button_OnClick(cancel, listener(&form, i_OnAccountCancel, Account));
+    i_update_telegram_fields(&form);
+
+    layout_label(layout, name_label, 0, 0);
+    layout_edit(layout, name, 1, 0);
+    layout_label(layout, identity_label, 0, 1);
+    layout_edit(layout, jid, 1, 1);
+    layout_button(layout, bot_mode, 1, 2);
+    layout_label(layout, code_label, 0, 3);
+    layout_edit(layout, password, 1, 3);
+    layout_label(layout, status_label, 0, 4);
+    layout_edit(layout, status, 1, 4);
+    layout_label(layout, result_label, 0, 5);
+    layout_label(layout, result, 1, 5);
+    layout_button(layout, auto_connect, 1, 6);
+    layout_layout(layout, buttons, 1, 7);
+    layout_label(layout, log_label, 0, 8);
+    layout_textview(layout, log, 1, 8);
+    layout_button(buttons, test, 0, 0);
+    layout_button(buttons, save, 1, 0);
+    layout_button(buttons, cancel, 2, 0);
+    layout_hexpand(buttons, 0);
+    layout_halign(buttons, 0, 0, ekLEFT);
+    layout_hmargin(buttons, 0, 6);
+    layout_hmargin(buttons, 1, 6);
+    for (i = 0; i < 9; i += 1)
+        layout_vmargin(layout, i, 8);
+    layout_margin(layout, 14);
+
+    panel_layout(panel, layout);
+    window_panel(window, panel);
+    i_account_log(&form, "Telegram dialog opened.");
+    i_account_log(&form, is_new == TRUE
+                  ? "Creating a new Telegram account."
+                  : "Editing an existing Telegram account.");
+    i_account_log(&form, i_telegram_bot_mode(&form) == TRUE
+                  ? "Bot mode on: bot token login."
+                  : "Bot mode off: phone number login.");
+    i_account_log(&form, "Click Test Connection, then enter the login code.");
+    window_client_size(window, s2df(780, 900));
+    window_defbutton(window, save);
     window_modal(window, parent != NULL ? parent : app->window);
     window_destroy(&window);
 
@@ -1121,9 +1476,16 @@ static void i_OnManagerRowClick(AccountManager *form, Event *e)
     unref(e);
 }
 
-static void i_OnManagerAdd(AccountManager *form, Event *e)
+static void i_OnManagerAddXmpp(AccountManager *form, Event *e)
 {
-    if (i_open_account_form(form->app, form->window, NULL, "", TRUE) == TRUE)
+    if (i_open_xmpp_form(form->app, form->window, NULL, "", TRUE) == TRUE)
+        i_manager_refresh(form);
+    unref(e);
+}
+
+static void i_OnManagerAddTelegram(AccountManager *form, Event *e)
+{
+    if (i_open_telegram_form(form->app, form->window, NULL, "", TRUE) == TRUE)
         i_manager_refresh(form);
     unref(e);
 }
@@ -1138,9 +1500,17 @@ static void i_OnManagerEdit(AccountManager *form, Event *e)
     }
     else
     {
+        bool_t accepted;
+        const CalAccount *account = &form->accounts[row];
+
         i_manager_focus_row(form, row);
-        if (i_open_account_form(form->app, form->window, &form->accounts[row],
-                                form->accounts[row].name, FALSE) == TRUE)
+        if (i_protocol_index(account->protocol) == 1)
+            accepted = i_open_telegram_form(form->app, form->window, account,
+                                            account->name, FALSE);
+        else
+            accepted = i_open_xmpp_form(form->app, form->window, account,
+                                        account->name, FALSE);
+        if (accepted == TRUE)
             i_manager_refresh(form);
     }
 
@@ -1206,10 +1576,11 @@ static void i_OnManageAccounts(App *app, Event *e)
 {
     Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
     Layout *layout = layout_create(4, 3);
-    Layout *footer = layout_create(4, 1);
+    Layout *footer = layout_create(5, 1);
     TableView *table = tableview_create();
     Label *status = label_create();
-    Button *add = button_push();
+    Button *add_xmpp = button_push();
+    Button *add_telegram = button_push();
     Button *edit = button_push();
     Button *delete_button = button_push();
     Button *close = button_push();
@@ -1256,15 +1627,18 @@ static void i_OnManageAccounts(App *app, Event *e)
     tableview_size(table, s2df(750, 220));
 
     label_text(status, "");
-    button_text(add, "Add");
+    button_text(add_xmpp, "Add XMPP");
+    button_text(add_telegram, "Add Telegram");
     button_text(edit, "Edit");
     button_text(delete_button, "Delete");
     button_text(close, "Close");
-    button_width(add, 90);
+    button_width(add_xmpp, 110);
+    button_width(add_telegram, 120);
     button_width(edit, 90);
     button_width(delete_button, 90);
     button_width(close, 90);
-    button_OnClick(add, listener(&form, i_OnManagerAdd, AccountManager));
+    button_OnClick(add_xmpp, listener(&form, i_OnManagerAddXmpp, AccountManager));
+    button_OnClick(add_telegram, listener(&form, i_OnManagerAddTelegram, AccountManager));
     button_OnClick(edit, listener(&form, i_OnManagerEdit, AccountManager));
     button_OnClick(delete_button, listener(&form, i_OnManagerDelete, AccountManager));
     button_OnClick(close, listener(&form, i_OnManagerClose, AccountManager));
@@ -1272,24 +1646,26 @@ static void i_OnManageAccounts(App *app, Event *e)
     layout_tableview(layout, table, 0, 0);
     layout_label(layout, status, 0, 1);
     layout_layout(layout, footer, 0, 2);
-    layout_button(footer, add, 0, 0);
-    layout_button(footer, edit, 1, 0);
-    layout_button(footer, delete_button, 2, 0);
-    layout_button(footer, close, 3, 0);
+    layout_button(footer, add_xmpp, 0, 0);
+    layout_button(footer, add_telegram, 1, 0);
+    layout_button(footer, edit, 2, 0);
+    layout_button(footer, delete_button, 3, 0);
+    layout_button(footer, close, 4, 0);
     layout_hexpand(layout, 0);
     layout_vexpand(layout, 0);
     layout_hexpand(footer, 0);
-    layout_halign(footer, 3, 0, ekRIGHT);
+    layout_halign(footer, 4, 0, ekRIGHT);
     layout_hmargin(footer, 1, 6);
     layout_hmargin(footer, 2, 6);
     layout_hmargin(footer, 3, 6);
+    layout_hmargin(footer, 4, 6);
     layout_vmargin(layout, 0, 8);
     layout_vmargin(layout, 1, 8);
     layout_margin(layout, 14);
 
     panel_layout(panel, layout);
     window_panel(window, panel);
-    window_client_size(window, s2df(780, 360));
+    window_client_size(window, s2df(830, 360));
     window_defbutton(window, close);
     window_hotkey(window, ekKEY_SUPR, 0, listener(&form, i_OnManagerDelete, AccountManager));
     window_hotkey(window, ekKEY_BACK, 0, listener(&form, i_OnManagerDelete, AccountManager));
@@ -1572,7 +1948,7 @@ static void i_build_menu(App *app)
 App *calantas_create(void)
 {
     App *app = heap_new0(App);
-    Layout *layout = layout_create(1, 4);
+    Layout *layout = layout_create(1, 3);
     Layout *toolbar = layout_create(5, 1);
     Label *filter_label = label_create();
     Panel *panel;
@@ -1585,7 +1961,6 @@ App *calantas_create(void)
     app->table = tableview_create();
     app->filter = edit_create();
     app->status = label_create();
-    app->account = label_create();
     app->message = button_push();
     app->add = button_push();
 
@@ -1680,12 +2055,10 @@ App *calantas_create(void)
 
     layout_layout(layout, toolbar, 0, 0);
     layout_tableview(layout, app->table, 0, 1);
-    layout_label(layout, app->account, 0, 2);
-    layout_label(layout, app->status, 0, 3);
+    layout_label(layout, app->status, 0, 2);
     layout_vexpand(layout, 1);
     layout_vmargin(layout, 0, 8);
     layout_vmargin(layout, 2, 6);
-    layout_vmargin(layout, 3, 6);
     layout_margin(layout, 10);
 
     panel = panel_create();

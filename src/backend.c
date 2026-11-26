@@ -1205,12 +1205,6 @@ static cal_status_t i_parse_status(const char_t *text)
     }
 }
 
-static uint32_t i_parse_u32(const char_t *text, const uint32_t max)
-{
-    unsigned long value = strtoul(text, NULL, 10);
-    return value > (unsigned long)max ? max : (uint32_t)value;
-}
-
 static void i_write_string(FILE *file, const char_t *prefix, const char_t *text)
 {
     fputs(prefix, file);
@@ -1319,17 +1313,29 @@ bool_t cal_backend_connect(Backend *backend, const char_t *protocol, const char_
     return TRUE;
 }
 
-bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
-                                   const char_t *password, const char_t *server,
-                                   const char_t *api_id, const char_t *api_hash)
+bool_t cal_backend_test_connection_logged(const char_t *protocol, const char_t *jid,
+                                          const char_t *password, const char_t *server,
+                                          const char_t *api_id, const char_t *api_hash,
+                                          CalTestLog log, void *context)
 {
     if (i_is_telegram(protocol) == TRUE)
-        return cal_telegram_test_connection(jid, password, api_id, api_hash);
+        return cal_telegram_test_connection_logged(jid, password, api_id, api_hash,
+                                                   log, context);
     if (cal_backend_xmpp_available() == FALSE)
         return FALSE;
     unref(api_id);
     unref(api_hash);
+    unref(log);
+    unref(context);
     return cal_xmpp_test_connection(jid, password, server);
+}
+
+bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
+                                   const char_t *password, const char_t *server,
+                                   const char_t *api_id, const char_t *api_hash)
+{
+    return cal_backend_test_connection_logged(protocol, jid, password, server,
+                                              api_id, api_hash, NULL, NULL);
 }
 
 bool_t cal_backend_is_connected(const Backend *backend)

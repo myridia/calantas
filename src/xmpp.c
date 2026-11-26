@@ -560,9 +560,8 @@ static int i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *us
     return 1;
 }
 
-static uint32_t i_thread_main(void *data)
+static uint32_t i_thread_main(XmppBackend *backend)
 {
-    XmppBackend *backend = (XmppBackend *)data;
     char_t jid[128];
     char_t password[128];
     char_t server[128];
