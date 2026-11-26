@@ -1,5 +1,8 @@
 nap_desktop_app(calantas "" NRC_NONE)
 target_include_directories(calantas PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(calantas PRIVATE
+  CALANTAS_TELEGRAM_APP_API_ID="${CALANTAS_TELEGRAM_APP_API_ID}"
+  CALANTAS_TELEGRAM_APP_API_HASH="${CALANTAS_TELEGRAM_APP_API_HASH}")
 
 if(CALANTAS_XMPP_TARGET)
   target_compile_definitions(calantas PRIVATE CALANTAS_HAVE_XMPP=1)

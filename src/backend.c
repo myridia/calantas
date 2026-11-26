@@ -1313,17 +1313,29 @@ bool_t cal_backend_connect(Backend *backend, const char_t *protocol, const char_
     return TRUE;
 }
 
-bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
-                                   const char_t *password, const char_t *server,
-                                   const char_t *api_id, const char_t *api_hash)
+bool_t cal_backend_test_connection_logged(const char_t *protocol, const char_t *jid,
+                                          const char_t *password, const char_t *server,
+                                          const char_t *api_id, const char_t *api_hash,
+                                          CalTestLog log, void *context)
 {
     if (i_is_telegram(protocol) == TRUE)
-        return cal_telegram_test_connection(jid, password, api_id, api_hash);
+        return cal_telegram_test_connection_logged(jid, password, api_id, api_hash,
+                                                   log, context);
     if (cal_backend_xmpp_available() == FALSE)
         return FALSE;
     unref(api_id);
     unref(api_hash);
+    unref(log);
+    unref(context);
     return cal_xmpp_test_connection(jid, password, server);
+}
+
+bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
+                                   const char_t *password, const char_t *server,
+                                   const char_t *api_id, const char_t *api_hash)
+{
+    return cal_backend_test_connection_logged(protocol, jid, password, server,
+                                              api_id, api_hash, NULL, NULL);
 }
 
 bool_t cal_backend_is_connected(const Backend *backend)

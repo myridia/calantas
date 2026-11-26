@@ -12,6 +12,11 @@ on:
         description: 'Release tag from caller (leave empty to use pushed tag)'
         required: false
         type: string
+    secrets:
+      API_ID:
+        required: true
+      API_HASH:
+        required: true
 
 permissions:
   contents: write
@@ -38,6 +43,18 @@ jobs:
       - name: Clean
         shell: bash
         run: rm -rf build dist
+
+      - name: Telegram app config
+        shell: bash
+        env:
+          TELEGRAM_API_ID: ${{ secrets.API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.API_HASH }}
+        run: |
+          if [ -z "$TELEGRAM_API_ID" ] || [ -z "$TELEGRAM_API_HASH" ]; then
+            echo "API_ID and API_HASH secrets are required"
+            exit 1
+          fi
+          printf '{\n  "api_id": "%s",\n  "api_hash": "%s"\n}\n' "$TELEGRAM_API_ID" "$TELEGRAM_API_HASH" > telegram-app.json
 
       - name: Build
         run: |

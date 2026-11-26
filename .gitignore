@@ -8,6 +8,7 @@ dist/
 *.obj
 *.elf
 nappgui_src/
+telegram-app.json
 
 # Linker output
 *.ilk

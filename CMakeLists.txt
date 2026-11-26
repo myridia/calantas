@@ -6,6 +6,26 @@ option(CALANTAS_REQUIRE_XMPP "Fail configuration when libstrophe is missing" OFF
 option(CALANTAS_ENABLE_TELEGRAM "Build the Telegram backend when TDLib is available" ON)
 option(CALANTAS_REQUIRE_TELEGRAM "Fail configuration when TDLib is missing" OFF)
 
+set(CALANTAS_TELEGRAM_APP_CONFIG "${CMAKE_SOURCE_DIR}/telegram-app.json")
+set(CALANTAS_TELEGRAM_APP_API_ID "")
+set(CALANTAS_TELEGRAM_APP_API_HASH "")
+if(EXISTS "${CALANTAS_TELEGRAM_APP_CONFIG}")
+  file(READ "${CALANTAS_TELEGRAM_APP_CONFIG}" CALANTAS_TELEGRAM_APP_JSON)
+  string(REGEX MATCH "\"api_id\"[ \t\r\n]*:[ \t\r\n]*\"?([0-9]+)" CALANTAS_TELEGRAM_APP_ID_MATCH "${CALANTAS_TELEGRAM_APP_JSON}")
+  set(CALANTAS_TELEGRAM_APP_API_ID "${CMAKE_MATCH_1}")
+  string(REGEX MATCH "\"api_hash\"[ \t\r\n]*:[ \t\r\n]*\"([0-9a-fA-F]+)\"" CALANTAS_TELEGRAM_APP_HASH_MATCH "${CALANTAS_TELEGRAM_APP_JSON}")
+  set(CALANTAS_TELEGRAM_APP_API_HASH "${CMAKE_MATCH_1}")
+  string(LENGTH "${CALANTAS_TELEGRAM_APP_API_HASH}" CALANTAS_TELEGRAM_APP_HASH_LENGTH)
+  if(CALANTAS_TELEGRAM_APP_API_ID STREQUAL ""
+      OR CALANTAS_TELEGRAM_APP_API_ID STREQUAL "0"
+      OR NOT CALANTAS_TELEGRAM_APP_HASH_LENGTH EQUAL 32)
+    message(FATAL_ERROR "Invalid telegram-app.json. Copy telegram-app.example.json and set a numeric api_id and a 32-character hex api_hash.")
+  endif()
+  message(STATUS "Telegram app config: loaded from telegram-app.json")
+else()
+  message(STATUS "Telegram app config: not found; copy telegram-app.example.json to telegram-app.json")
+endif()
+
 if(DEFINED ENV{NAPPGUI_DIR})
   set(nappgui_DIR "$ENV{NAPPGUI_DIR}/cmake" CACHE PATH "NAppGUI cmake directory")
 elseif(WIN32)
