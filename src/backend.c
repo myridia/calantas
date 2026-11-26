@@ -418,14 +418,14 @@ static bool_t i_state_path(char_t *out, const uint32_t size, const char_t *marke
     i_safe_marker(safe, sizeof(safe), marker);
     prefix = i_is_telegram(protocol) == TRUE ? "telegram" : "xmpp";
 #if defined(_WIN32)
-    if (safe[0] == '\0' || strcmp(safe, "XMPP") == 0
-        || strcmp(safe, "Telegram") == 0)
+    if (safe[0] == '\0'
+        || strcmp(safe, i_is_telegram(protocol) == TRUE ? "Telegram" : "XMPP") == 0)
         bstd_sprintf(out, size, "%s\\state-%s.txt", dir, prefix);
     else
         bstd_sprintf(out, size, "%s\\state-%s-%s.txt", dir, prefix, safe);
 #else
-    if (safe[0] == '\0' || strcmp(safe, "XMPP") == 0
-        || strcmp(safe, "Telegram") == 0)
+    if (safe[0] == '\0'
+        || strcmp(safe, i_is_telegram(protocol) == TRUE ? "Telegram" : "XMPP") == 0)
         bstd_sprintf(out, size, "%s/state-%s.txt", dir, prefix);
     else
         bstd_sprintf(out, size, "%s/state-%s-%s.txt", dir, prefix, safe);
@@ -1077,6 +1077,9 @@ static bool_t i_apply_account(Backend *backend, const CalAccount *account)
     if (backend == NULL || account == NULL)
         return FALSE;
 
+    cal_xmpp_disconnect(backend->xmpp);
+    cal_telegram_disconnect(backend->telegram);
+
     bstd_sprintf(backend->account_name, sizeof(backend->account_name), "%s", account->name);
     bstd_sprintf(backend->account_marker, sizeof(backend->account_marker), "%s", account->name);
     bstd_sprintf(backend->protocol, sizeof(backend->protocol), "%s",
@@ -1260,6 +1263,12 @@ bool_t cal_backend_connect(Backend *backend, const char_t *protocol, const char_
     telegram = i_is_telegram(protocol);
     if (telegram == FALSE && (password == NULL || password[0] == '\0'))
         return FALSE;
+    if (telegram == TRUE && cal_backend_telegram_available() == FALSE)
+    {
+        bstd_sprintf(backend->connection_text, sizeof(backend->connection_text), "%s",
+                     "Telegram support is not available in this build");
+        return FALSE;
+    }
     if (telegram == TRUE && (api_id == NULL || api_id[0] == '\0'
                              || api_hash == NULL || api_hash[0] == '\0'))
     {
@@ -1676,8 +1685,10 @@ bool_t cal_backend_poll(Backend *backend, CalEvent *event)
     if (backend == NULL || event == NULL)
         return FALSE;
 
-    i_poll_xmpp_events(backend);
-    i_poll_telegram_events(backend);
+    if (i_is_telegram(backend->protocol) == TRUE)
+        i_poll_telegram_events(backend);
+    else
+        i_poll_xmpp_events(backend);
 
     if (backend->event_head == backend->event_tail)
         return FALSE;

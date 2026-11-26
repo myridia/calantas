@@ -4,7 +4,7 @@
 
 A basic desktop messenger with the classic Pidgin-style buddy list, written in C with NAppGUI. Calantas uses its own backend interface and does not include `libpurple3`, GTK or Libadwaita.
 
-Calantas uses XMPP through libstrophe for TLS login, roster, presence and direct messages. Multiple XMPP accounts can be saved with their own markers; account details, buddies and recent messages are saved between runs. XMPP credentials live in a permanent `account.json` file.
+Calantas uses XMPP through libstrophe for TLS login, roster, presence and direct messages, and Telegram through TDLib's JSON C API. Multiple XMPP and Telegram accounts can be saved with their own names; account details, buddies and recent messages are saved between runs. Credentials live in a permanent `account.json` file.
 
 ## Stack
 
@@ -45,7 +45,7 @@ The binary is written to `build/Release/bin/calantas`.
 
 NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows. Override the SDK location with `NAPPGUI_DIR=/path/to/nappgui`. Setup tasks clone the NAppGUI source into `~/.cache/calantas/nappgui_src`, outside the repository, so the project stays clean.
 
-The XMPP backend is optional at build time. CMake detects libstrophe through `pkg-config` or a normal library search. Without it, Calantas still builds but cannot connect.
+The XMPP and Telegram backends are optional at build time. CMake detects libstrophe and `tdjson` through `pkg-config` or a normal library search. Without a backend library, Calantas still builds but that protocol cannot connect.
 
 Run task **7** in `./ask.sh` to install only the XMPP dependencies, or task **8** to install everything Calantas needs. Task 8 installs NAppGUI plus libstrophe, TDLib, libcurl, cJSON, OpenSSL, Expat, zlib, pkg-config and the build tools for the current platform. IRC needs no extra library.
 
@@ -70,7 +70,7 @@ On Windows, install the vcpkg packages:
 vcpkg install libstrophe:x64-windows openssl:x64-windows expat:x64-windows zlib:x64-windows curl:x64-windows cjson:x64-windows tdlib:x64-windows
 ```
 
-Then pass `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`. Use `-DCALANTAS_ENABLE_XMPP=OFF` to disable XMPP detection; the app will build but cannot connect. If libstrophe is missing but you want configuration to fail instead of disabling XMPP, pass `-DCALANTAS_REQUIRE_XMPP=ON`.
+Then pass `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`. Use `-DCALANTAS_ENABLE_XMPP=OFF` or `-DCALANTAS_ENABLE_TELEGRAM=OFF` to disable that protocol's detection; the app will build but that protocol cannot connect. If a library is missing but you want configuration to fail instead of disabling the backend, pass `-DCALANTAS_REQUIRE_XMPP=ON` or `-DCALANTAS_REQUIRE_TELEGRAM=ON`.
 
 ## Interface
 
@@ -79,13 +79,14 @@ Then pass `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`. Use
 - Message and Add Buddy buttons
 - One conversation window per buddy
 - Manage accounts dialog with a table of saved accounts and Add, Edit, Delete and Close buttons
-- XMPP account dialog with marker, JID, password, optional server, startup auto-connect and a connection test button
+- Account dialog with protocol selector, name, identity, credentials, optional server, startup auto-connect and Test/Save buttons
 - Accounts menu with one **Manage account** entry; the active account has a `*` marker in the table
 - Status menu: Available, Away, Busy, Offline
 - Contacts menu with online-only and all-buddies views
 - About dialog and platform-style app menu
-- One state file per account marker (`state-xmpp.txt` for `XMPP`, otherwise `state-xmpp-MARKER.txt`) for account name, status, buddies and recent messages
+- One state file per protocol and account name (`state-xmpp.txt` / `state-xmpp-NAME.txt` or `state-telegram.txt` / `state-telegram-NAME.txt`) for status, buddies and recent messages
 - XMPP worker thread with roster, presence and direct-message events
+- Telegram worker thread with chats and incoming text-message events
 
 ## Structure
 
@@ -93,6 +94,7 @@ Then pass `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`. Use
 - `src/gui.c` / `src/gui.h` — NAppGUI windows, buddy list, conversations, menus and dialogs
 - `src/backend.c` / `src/backend.h` — messenger model and text state persistence
 - `src/xmpp.c` / `src/xmpp.h` — libstrophe backend and worker-thread event queue
+- `src/telegram.c` / `src/telegram.h` — TDLib JSON backend and worker-thread event queue
 - `src/res/` — application icons
 - `CMakeLists.txt` — top-level NAppGUI project
 - `src/CMakeLists.txt` — desktop app target
@@ -112,11 +114,11 @@ The GUI talks only to `backend.h`, so real protocols can be added without changi
 |---|---|
 | XMPP + libstrophe | Implemented, optional build |
 | IRC | Planned |
-| Telegram + TDLib | Planned |
+| Telegram + TDLib | Implemented, optional build |
 | ActivityPub via Mastodon API | Planned |
 | Raw ActivityPub | Planned later |
 
-Open **Accounts → Manage account** to see the saved accounts in a table. **Add** opens an XMPP account dialog where you enter a marker, JID and password; **Edit** changes the selected account; **Delete** removes it; **Close** returns to the buddy list. Double-click a row to switch to that account. Each marker is a separate saved account/server with its own roster and recent messages. The marker, JID, password, optional server override and auto-connect flag are kept in `account.json`; roster and recent messages stay in `state-xmpp-MARKER.txt`. The password is stored in plain text with user-only file permissions on Linux/macOS; it is not encrypted. The active account is prefixed with `*` in the table. Check **Connect automatically on startup (XMPP)** to connect with the active saved account when Calantas starts. On first run, credentials from an older `state-xmpp.txt` are migrated into `account.json`. Use **Test** in the XMPP account dialog to verify the JID, password and server before saving.
+Open **Accounts → Manage account** to see the saved accounts in a table. **Add** opens an account dialog with an XMPP/Telegram selector. For XMPP, enter an account name, JID and password plus an optional server override. For Telegram, enter the phone number or bot token together with an API ID and API hash from `my.telegram.org/apps`; the password field holds the login code, or `code:2FA-password` when two-step verification is enabled. **Test** opens a temporary real connection, **Save** writes `account.json` and connects, **Edit** changes the selected account, **Delete** removes it and **Close** returns to the buddy list. Double-click a row to switch to that account. Each account has its own roster and recent messages in `state-xmpp-NAME.txt` or `state-telegram-NAME.txt`. The account name, protocol, identity, credentials, optional server, API ID/hash and auto-connect flag are kept in `account.json`; secrets are stored in plain text with user-only file permissions on Linux/macOS and are not encrypted. The active account is prefixed with `*` in the table. Check **Connect automatically on startup** to connect with the active saved account when Calantas starts. On first run, credentials from an older `state-xmpp.txt` are migrated into `account.json`. Telegram sessions are reused from TDLib's local database after the first successful login.
 
 There is no libpurple3 adapter and no plan to add one.
 

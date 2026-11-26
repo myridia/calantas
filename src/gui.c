@@ -532,6 +532,11 @@ static const char_t *i_protocol_from_index(const uint32_t index)
     return index == 1 ? "Telegram" : "XMPP";
 }
 
+static const char_t *i_protocol_name(const char_t *protocol)
+{
+    return i_protocol_index(protocol) == 1 ? "Telegram" : "XMPP";
+}
+
 static bool_t i_form_telegram(const Account *form)
 {
     return form != NULL && combo_get_selected(form->protocol) == 1 ? TRUE : FALSE;
@@ -542,15 +547,14 @@ static void i_update_account_fields(Account *form)
     bool_t telegram = i_form_telegram(form);
 
     label_text(form->identity_label, telegram == TRUE ? "Phone or bot token:" : "JID:");
-    label_text(form->password_label,
-               telegram == TRUE ? "Code / 2FA password:" : "Password:");
+    label_text(form->password_label, telegram == TRUE ? "Code / 2FA:" : "Password:");
     label_text(form->server_label, telegram == TRUE ? "Server (unused):" : "Server:");
     label_text(form->api_id_label, telegram == TRUE ? "Telegram API ID:" : "API ID:");
     label_text(form->api_hash_label, telegram == TRUE ? "Telegram API hash:" : "API hash:");
     edit_phtext(form->jid, telegram == TRUE ? "+15551234567 or 123456:TOKEN"
                                            : "user@example.org");
-    edit_phtext(form->password, telegram == TRUE ? "Login code or 2FA password"
-                                                : "Saved in account.json");
+    edit_phtext(form->password, telegram == TRUE ? "123456 or 123456:2FA"
+                                                 : "Saved in account.json");
     edit_phtext(form->api_id, telegram == TRUE ? "From my.telegram.org/apps" : "Not used by XMPP");
     edit_phtext(form->api_hash, telegram == TRUE ? "From my.telegram.org/apps" : "Not used by XMPP");
     edit_editable(form->api_id, telegram == TRUE ? TRUE : FALSE);
@@ -568,18 +572,40 @@ static void i_OnProtocolChange(Account *form, Event *e)
 
 static void i_OnTest(Account *form, Event *e)
 {
+    const char_t *protocol = i_protocol_from_index(combo_get_selected(form->protocol));
     const char_t *jid = edit_get_text(form->jid);
     const char_t *password = edit_get_text(form->password);
     const char_t *server = edit_get_text(form->server);
+    const char_t *api_id = edit_get_text(form->api_id);
+    const char_t *api_hash = edit_get_text(form->api_hash);
 
-    if (jid == NULL || jid[0] == '\0' || password == NULL || password[0] == '\0')
+    if (jid == NULL || jid[0] == '\0')
+        label_text(form->result, "Enter an identity to test.");
+    else if (i_form_telegram(form) == TRUE)
+    {
+        if (api_id == NULL || api_id[0] == '\0' || api_hash == NULL || api_hash[0] == '\0')
+            label_text(form->result, "Enter the Telegram API ID and API hash to test.");
+        else if (cal_backend_telegram_available() == FALSE)
+            label_text(form->result, "Telegram support is not available in this build.");
+        else
+        {
+            label_text(form->result, "Testing connection...");
+            if (cal_backend_test_connection(protocol, jid, password, server,
+                                            api_id, api_hash) == TRUE)
+                label_text(form->result, "Connected.");
+            else
+                label_text(form->result, "Connection failed, code required or timed out.");
+        }
+    }
+    else if (password == NULL || password[0] == '\0')
         label_text(form->result, "Enter JID and password to test.");
     else if (cal_backend_xmpp_available() == FALSE)
         label_text(form->result, "XMPP support is not available in this build.");
     else
     {
         label_text(form->result, "Testing connection...");
-        if (cal_backend_test_connection(jid, password, server) == TRUE)
+        if (cal_backend_test_connection(protocol, jid, password, server,
+                                        api_id, api_hash) == TRUE)
             label_text(form->result, "Connected.");
         else
             label_text(form->result, "Connection failed or timed out.");
@@ -595,11 +621,18 @@ static void i_OnAccountOk(Account *form, Event *e)
     const char_t *jid_text = edit_get_text(form->jid);
     const char_t *password_text = edit_get_text(form->password);
     const char_t *server_text = edit_get_text(form->server);
+    const char_t *api_id_text = edit_get_text(form->api_id);
+    const char_t *api_hash_text = edit_get_text(form->api_hash);
+    const char_t *protocol = i_protocol_from_index(combo_get_selected(form->protocol));
     CalAccount account;
     char_t name[64];
     char_t jid[128];
     char_t password[128];
     char_t server[128];
+    char_t api_id[32];
+    char_t api_hash[64];
+    char_t connecting[128];
+    bool_t telegram = i_form_telegram(form);
     bool_t auto_connect = button_get_state(form->auto_connect) == ekGUI_ON;
     App *app = form->app;
 
@@ -607,6 +640,10 @@ static void i_OnAccountOk(Account *form, Event *e)
     bstd_sprintf(jid, sizeof(jid), "%s", jid_text != NULL ? jid_text : "");
     bstd_sprintf(password, sizeof(password), "%s", password_text != NULL ? password_text : "");
     bstd_sprintf(server, sizeof(server), "%s", server_text != NULL ? server_text : "");
+    bstd_sprintf(api_id, sizeof(api_id), "%s", api_id_text != NULL && telegram == TRUE
+                                                    ? api_id_text : "");
+    bstd_sprintf(api_hash, sizeof(api_hash), "%s", api_hash_text != NULL && telegram == TRUE
+                                                      ? api_hash_text : "");
 
     if (name[0] == '\0')
     {
@@ -623,11 +660,23 @@ static void i_OnAccountOk(Account *form, Event *e)
         }
         else
         {
-            bstd_sprintf(name, sizeof(name), "%s", "XMPP");
+            bstd_sprintf(name, sizeof(name), "%s", protocol);
         }
     }
 
-    if (jid[0] == '\0' || password[0] == '\0')
+    if (jid[0] == '\0')
+    {
+        label_text(form->result, "Enter an identity before saving.");
+        unref(e);
+        return;
+    }
+    if (telegram == TRUE && (api_id[0] == '\0' || api_hash[0] == '\0'))
+    {
+        label_text(form->result, "Enter the Telegram API ID and API hash before saving.");
+        unref(e);
+        return;
+    }
+    if (telegram == FALSE && password[0] == '\0')
     {
         label_text(form->result, "Enter JID and password before saving.");
         unref(e);
@@ -636,9 +685,12 @@ static void i_OnAccountOk(Account *form, Event *e)
 
     memset(&account, 0, sizeof(account));
     bstd_sprintf(account.name, sizeof(account.name), "%s", name);
+    bstd_sprintf(account.protocol, sizeof(account.protocol), "%s", protocol);
     bstd_sprintf(account.jid, sizeof(account.jid), "%s", jid);
     bstd_sprintf(account.password, sizeof(account.password), "%s", password);
     bstd_sprintf(account.server, sizeof(account.server), "%s", server);
+    bstd_sprintf(account.api_id, sizeof(account.api_id), "%s", api_id);
+    bstd_sprintf(account.api_hash, sizeof(account.api_hash), "%s", api_hash);
     account.auto_connect = auto_connect;
 
     if (form->is_new == TRUE)
@@ -666,10 +718,16 @@ static void i_OnAccountOk(Account *form, Event *e)
     cal_backend_set_status(app->backend, cal_backend_status(app->backend), text);
     cal_backend_set_auto_connect(app->backend, auto_connect);
 
-    if (cal_backend_connect(app->backend, jid, password, server) == TRUE)
-        i_set_status(app, "XMPP account saved; connecting");
+    if (cal_backend_connect(app->backend, protocol, jid, password, server,
+                            api_id, api_hash) == TRUE)
+    {
+        bstd_sprintf(connecting, sizeof(connecting), "%s account saved; connecting", protocol);
+        i_set_status(app, connecting);
+    }
     else
+    {
         i_set_status(app, cal_backend_connection_text(app->backend));
+    }
 
     {
         char_t saved[128];
@@ -693,14 +751,16 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
                                   const char_t *original, const bool_t is_new)
 {
     Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
-    Layout *layout = layout_create(2, 9);
+    Layout *layout = layout_create(2, 11);
     Layout *buttons = layout_create(3, 1);
     Label *protocol_label = label_create();
-    Label *protocol = label_create();
+    Combo *protocol = combo_create();
     Label *name_label = label_create();
     Label *jid_label = label_create();
     Label *password_label = label_create();
     Label *server_label = label_create();
+    Label *api_id_label = label_create();
+    Label *api_hash_label = label_create();
     Label *status_label = label_create();
     Label *result_label = label_create();
     Label *result = label_create();
@@ -708,6 +768,8 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     Edit *jid = edit_create();
     Edit *password = edit_create();
     Edit *server = edit_create();
+    Edit *api_id = edit_create();
+    Edit *api_hash = edit_create();
     Edit *status = edit_create();
     Button *auto_connect = button_check();
     Button *test = button_push();
@@ -720,6 +782,9 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     char_t jid_value[128];
     char_t password_value[128];
     char_t server_value[128];
+    char_t api_id_value[32];
+    char_t api_hash_value[64];
+    uint32_t protocol_index;
     bool_t auto_value = FALSE;
     Account form;
 
@@ -730,8 +795,15 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     form.jid = jid;
     form.password = password;
     form.server = server;
+    form.api_id = api_id;
+    form.api_hash = api_hash;
     form.status = status;
     form.auto_connect = auto_connect;
+    form.identity_label = jid_label;
+    form.password_label = password_label;
+    form.server_label = server_label;
+    form.api_id_label = api_id_label;
+    form.api_hash_label = api_hash_label;
     form.result = result;
     form.is_new = is_new;
     form.accepted = FALSE;
@@ -745,43 +817,49 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
              && cal_backend_account_get(cal_backend_active_account(app->backend), &copy) == FALSE)
         memset(&copy, 0, sizeof(copy));
 
+    if (copy.protocol[0] == '\0')
+        bstd_sprintf(copy.protocol, sizeof(copy.protocol), "%s",
+                     cal_backend_protocol(app->backend));
     if (copy.name[0] == '\0')
-        bstd_sprintf(copy.name, sizeof(copy.name), "%s", "XMPP");
+        bstd_sprintf(copy.name, sizeof(copy.name), "%s",
+                     i_protocol_name(copy.protocol));
+    protocol_index = i_protocol_index(copy.protocol);
     bstd_sprintf(name_value, sizeof(name_value), "%s", copy.name);
     bstd_sprintf(jid_value, sizeof(jid_value), "%s", copy.jid);
     bstd_sprintf(password_value, sizeof(password_value), "%s", copy.password);
     bstd_sprintf(server_value, sizeof(server_value), "%s", copy.server);
+    bstd_sprintf(api_id_value, sizeof(api_id_value), "%s", copy.api_id);
+    bstd_sprintf(api_hash_value, sizeof(api_hash_value), "%s", copy.api_hash);
     auto_value = copy.auto_connect;
 
-    bstd_sprintf(title, sizeof(title), "%s", is_new == TRUE ? "Add XMPP Account" : "Edit XMPP Account");
+    bstd_sprintf(title, sizeof(title), "%s", is_new == TRUE ? "Add Account" : "Edit Account");
     window_title(window, title);
     label_text(protocol_label, "Protocol:");
-    label_text(protocol, "XMPP");
+    combo_add_elem(protocol, "XMPP", NULL);
+    combo_add_elem(protocol, "Telegram", NULL);
+    combo_selected(protocol, protocol_index);
     label_text(name_label, "Account name:");
-    label_text(jid_label, "JID:");
-    label_text(password_label, "Password:");
-    label_text(server_label, "Server:");
     label_text(status_label, "Status:");
     label_text(result_label, "Result:");
     label_text(result, "Not tested");
     label_multiline(result, TRUE);
-    label_width(result, 300);
+    label_width(result, 320);
     edit_text(name, name_value);
     edit_text(jid, jid_value);
     edit_text(password, password_value);
     edit_text(server, server_value);
+    edit_text(api_id, api_id_value);
+    edit_text(api_hash, api_hash_value);
     edit_text(status, cal_backend_status_text(app->backend));
     edit_passmode(password, TRUE);
-    edit_phtext(jid, "user@example.org");
-    edit_phtext(password, "Saved in account.json");
-    edit_phtext(server, "Optional server override");
-    button_text(auto_connect, "Connect automatically on startup (XMPP)");
     button_state(auto_connect, auto_value == TRUE ? ekGUI_ON : ekGUI_OFF);
-    edit_width(name, 300);
-    edit_width(jid, 300);
-    edit_width(password, 300);
-    edit_width(server, 300);
-    edit_width(status, 300);
+    edit_width(name, 320);
+    edit_width(jid, 320);
+    edit_width(password, 320);
+    edit_width(server, 320);
+    edit_width(api_id, 320);
+    edit_width(api_hash, 320);
+    edit_width(status, 320);
 
     button_text(test, "Test");
     button_text(save, "Save");
@@ -789,9 +867,11 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     button_OnClick(test, listener(&form, i_OnTest, Account));
     button_OnClick(save, listener(&form, i_OnAccountOk, Account));
     button_OnClick(cancel, listener(&form, i_OnAccountCancel, Account));
+    combo_OnChange(protocol, listener(&form, i_OnProtocolChange, Account));
+    i_update_account_fields(&form);
 
     layout_label(layout, protocol_label, 0, 0);
-    layout_label(layout, protocol, 1, 0);
+    layout_combo(layout, protocol, 1, 0);
     layout_label(layout, name_label, 0, 1);
     layout_edit(layout, name, 1, 1);
     layout_label(layout, jid_label, 0, 2);
@@ -800,12 +880,16 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     layout_edit(layout, password, 1, 3);
     layout_label(layout, server_label, 0, 4);
     layout_edit(layout, server, 1, 4);
-    layout_label(layout, status_label, 0, 5);
-    layout_edit(layout, status, 1, 5);
-    layout_label(layout, result_label, 0, 6);
-    layout_label(layout, result, 1, 6);
-    layout_button(layout, auto_connect, 1, 7);
-    layout_layout(layout, buttons, 1, 8);
+    layout_label(layout, api_id_label, 0, 5);
+    layout_edit(layout, api_id, 1, 5);
+    layout_label(layout, api_hash_label, 0, 6);
+    layout_edit(layout, api_hash, 1, 6);
+    layout_label(layout, status_label, 0, 7);
+    layout_edit(layout, status, 1, 7);
+    layout_label(layout, result_label, 0, 8);
+    layout_label(layout, result, 1, 8);
+    layout_button(layout, auto_connect, 1, 9);
+    layout_layout(layout, buttons, 1, 10);
     layout_button(buttons, test, 0, 0);
     layout_button(buttons, save, 1, 0);
     layout_button(buttons, cancel, 2, 0);
@@ -821,11 +905,13 @@ static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *so
     layout_vmargin(layout, 5, 8);
     layout_vmargin(layout, 6, 8);
     layout_vmargin(layout, 7, 8);
+    layout_vmargin(layout, 8, 8);
+    layout_vmargin(layout, 9, 8);
     layout_margin(layout, 14);
 
     panel_layout(panel, layout);
     window_panel(window, panel);
-    window_client_size(window, s2df(520, 470));
+    window_client_size(window, s2df(560, 560));
     window_defbutton(window, save);
 
     window_modal(window, parent != NULL ? parent : app->window);
@@ -847,7 +933,8 @@ static void i_manager_refresh(AccountManager *form)
         const char_t *name = form->accounts[i].name[0] != '\0'
                                  ? form->accounts[i].name
                                  : (form->accounts[i].jid[0] != '\0'
-                                        ? form->accounts[i].jid : "XMPP");
+                                        ? form->accounts[i].jid
+                                        : i_protocol_name(form->accounts[i].protocol));
 
         if (active != NULL && active[0] != '\0' && strcmp(active, form->accounts[i].name) == 0)
             bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "* %s", name);
@@ -906,17 +993,27 @@ static void i_manager_activate(AccountManager *form, const uint32_t row)
     if (cal_backend_select_account(app->backend, account.name) == TRUE)
     {
         i_rebuild_rows(app);
-        if (account.jid[0] != '\0' && account.password[0] != '\0')
+        if (account.jid[0] != '\0'
+            && (i_protocol_index(account.protocol) == 1 || account.password[0] != '\0'))
         {
-            if (cal_backend_connect(app->backend, account.jid, account.password,
-                                    account.server) == TRUE)
-                i_set_status(app, "Connecting to XMPP");
+            if (cal_backend_connect(app->backend, account.protocol, account.jid,
+                                    account.password, account.server,
+                                    account.api_id, account.api_hash) == TRUE)
+            {
+                char_t text[96];
+
+                bstd_sprintf(text, sizeof(text), "Connecting to %s",
+                             i_protocol_name(account.protocol));
+                i_set_status(app, text);
+            }
             else
+            {
                 i_set_status(app, cal_backend_connection_text(app->backend));
+            }
         }
         else
         {
-            i_set_status(app, "Account needs a JID and password.");
+            i_set_status(app, "Account needs an identity and password.");
         }
     }
     else
@@ -951,12 +1048,15 @@ static void i_OnManagerTableData(AccountManager *form, Event *e)
                 cell->text = form->labels[pos->row];
                 break;
             case 1:
-                cell->text = account->jid;
+                cell->text = i_protocol_name(account->protocol);
                 break;
             case 2:
-                cell->text = account->server;
+                cell->text = account->jid;
                 break;
             case 3:
+                cell->text = account->server;
+                break;
+            case 4:
                 cell->text = account->auto_connect == TRUE ? "Yes" : "No";
                 break;
             default:
@@ -1135,21 +1235,25 @@ static void i_OnManageAccounts(App *app, Event *e)
     tableview_multisel(table, FALSE, FALSE);
     tableview_add_column_text(table);
     tableview_header_title(table, 0, "Account");
-    tableview_column_width(table, 0, 150);
+    tableview_column_width(table, 0, 140);
     tableview_column_limits(table, 0, 80, 300);
     tableview_add_column_text(table);
-    tableview_header_title(table, 1, "JID");
-    tableview_column_width(table, 1, 220);
-    tableview_column_limits(table, 1, 120, 400);
+    tableview_header_title(table, 1, "Protocol");
+    tableview_column_width(table, 1, 90);
+    tableview_column_limits(table, 1, 80, 180);
     tableview_add_column_text(table);
-    tableview_header_title(table, 2, "Server");
-    tableview_column_width(table, 2, 180);
-    tableview_column_limits(table, 2, 100, 360);
+    tableview_header_title(table, 2, "JID / identity");
+    tableview_column_width(table, 2, 220);
+    tableview_column_limits(table, 2, 120, 400);
     tableview_add_column_text(table);
-    tableview_header_title(table, 3, "Auto-connect");
-    tableview_column_width(table, 3, 120);
-    tableview_column_limits(table, 3, 90, 180);
-    tableview_size(table, s2df(670, 220));
+    tableview_header_title(table, 3, "Server");
+    tableview_column_width(table, 3, 160);
+    tableview_column_limits(table, 3, 100, 360);
+    tableview_add_column_text(table);
+    tableview_header_title(table, 4, "Auto-connect");
+    tableview_column_width(table, 4, 120);
+    tableview_column_limits(table, 4, 90, 180);
+    tableview_size(table, s2df(750, 220));
 
     label_text(status, "");
     button_text(add, "Add");
@@ -1185,7 +1289,7 @@ static void i_OnManageAccounts(App *app, Event *e)
 
     panel_layout(panel, layout);
     window_panel(window, panel);
-    window_client_size(window, s2df(720, 360));
+    window_client_size(window, s2df(780, 360));
     window_defbutton(window, close);
     window_hotkey(window, ekKEY_SUPR, 0, listener(&form, i_OnManagerDelete, AccountManager));
     window_hotkey(window, ekKEY_BACK, 0, listener(&form, i_OnManagerDelete, AccountManager));
@@ -1531,20 +1635,38 @@ App *calantas_create(void)
     label_multiline(app->status, TRUE);
     i_rebuild_rows(app);
 
-    if (cal_backend_auto_connect(app->backend) == TRUE
-        && cal_backend_account_jid(app->backend)[0] != '\0'
-        && cal_backend_account_password(app->backend)[0] != '\0')
     {
-        if (cal_backend_connect(app->backend, cal_backend_account_jid(app->backend),
-                                cal_backend_account_password(app->backend),
-                                cal_backend_account_server(app->backend)) == TRUE)
-            i_set_status(app, "Connecting to XMPP");
+        const char_t *protocol = cal_backend_protocol(app->backend);
+        bool_t telegram = i_protocol_index(protocol) == 1;
+
+        if (cal_backend_auto_connect(app->backend) == TRUE
+            && cal_backend_account_jid(app->backend)[0] != '\0'
+            && (telegram == TRUE || cal_backend_account_password(app->backend)[0] != '\0')
+            && (telegram == FALSE || (cal_backend_api_id(app->backend)[0] != '\0'
+                                      && cal_backend_api_hash(app->backend)[0] != '\0')))
+        {
+            if (cal_backend_connect(app->backend, protocol,
+                                    cal_backend_account_jid(app->backend),
+                                    cal_backend_account_password(app->backend),
+                                    cal_backend_account_server(app->backend),
+                                    cal_backend_api_id(app->backend),
+                                    cal_backend_api_hash(app->backend)) == TRUE)
+            {
+                char_t text[96];
+
+                bstd_sprintf(text, sizeof(text), "Connecting to %s",
+                             i_protocol_name(protocol));
+                i_set_status(app, text);
+            }
+            else
+            {
+                i_set_status(app, cal_backend_connection_text(app->backend));
+            }
+        }
         else
-            i_set_status(app, cal_backend_connection_text(app->backend));
-    }
-    else
-    {
-        i_set_status(app, "Ready");
+        {
+            i_set_status(app, "Ready");
+        }
     }
 
     layout_button(toolbar, app->message, 0, 0);

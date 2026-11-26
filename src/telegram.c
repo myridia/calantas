@@ -16,7 +16,6 @@ extern struct TdJson *td_json_client_create(void);
 extern void td_json_client_destroy(struct TdJson *client);
 extern const char_t *td_json_client_receive(struct TdJson *client, const double timeout);
 extern void td_json_client_send(struct TdJson *client, const char_t *request);
-extern const char_t *td_json_client_execute(struct TdJson *client, const char_t *request);
 
 #endif
 
@@ -287,10 +286,43 @@ static bool_t i_is_bot_token(const char_t *text)
     return p > text && *p == ':' && p[1] != '\0' ? TRUE : FALSE;
 }
 
+static void i_secret_part(const char_t *secret, const bool_t first, char_t *out,
+                          const uint32_t size)
+{
+    const char_t *source;
+    size_t length;
+    uint32_t n = 0;
+
+    if (out == NULL || size == 0)
+        return;
+    out[0] = '\0';
+    if (secret == NULL)
+        return;
+
+    source = secret;
+    length = strlen(secret);
+    if (strchr(secret, ':') != NULL)
+    {
+        const char_t *colon = strchr(secret, ':');
+
+        if (first == TRUE)
+            length = (size_t)(colon - secret);
+        else
+            source = colon + 1;
+    }
+
+    while (n + 1 < size && n < length && source[n] != '\0')
+    {
+        out[n] = source[n];
+        n += 1;
+    }
+    out[n] = '\0';
+}
+
 #if CALANTAS_HAVE_TELEGRAM
 
 static void i_set_parameters(struct TdJson *client, const char_t *api_id,
-                             const char_t *api_hash)
+                             const char_t *api_hash, const char_t *database_directory)
 {
     char_t hash[256];
     char_t request[2048];
@@ -298,20 +330,21 @@ static void i_set_parameters(struct TdJson *client, const char_t *api_id,
     i_json_escape(hash, sizeof(hash), api_hash);
     bstd_sprintf(request, sizeof(request),
                  "{\"@type\":\"setTdlibParameters\",\"parameters\":{"
-                 "\"database_directory\":\"calantas-telegram\","
+                 "\"database_directory\":\"%s\","
                  "\"use_file_database\":true,\"use_chat_info_database\":true,"
                  "\"use_message_database\":true,\"use_secret_chats\":false,"
                  "\"api_id\":%d,\"api_hash\":\"%s\","
                  "\"system_language_code\":\"en\",\"device_model\":\"Desktop\","
                  "\"system_version\":\"Calantas\",\"application_version\":\"1.0\","
                  "\"enable_storage_optimizer\":true,\"ignore_file_names\":false}}",
-                 api_id != NULL ? atoi(api_id) : 0, hash);
+                 database_directory, api_id != NULL ? atoi(api_id) : 0, hash);
     td_json_client_send(client, request);
 }
 
 static bool_t i_send_auth_request(struct TdJson *client, const char_t *state,
                                   const char_t *identity, const char_t *password,
-                                  const char_t *api_id, const char_t *api_hash)
+                                  const char_t *api_id, const char_t *api_hash,
+                                  const char_t *database_directory)
 {
     char_t request[1024];
     char_t value[256];
@@ -321,7 +354,7 @@ static bool_t i_send_auth_request(struct TdJson *client, const char_t *state,
 
     if (strcmp(state, "authorizationStateWaitTdlibParameters") == 0)
     {
-        i_set_parameters(client, api_id, api_hash);
+        i_set_parameters(client, api_id, api_hash, database_directory);
         return TRUE;
     }
     if (strcmp(state, "authorizationStateWaitEncryptionKey") == 0)
@@ -346,9 +379,12 @@ static bool_t i_send_auth_request(struct TdJson *client, const char_t *state,
     }
     if (strcmp(state, "authorizationStateWaitCode") == 0)
     {
-        if (password == NULL || password[0] == '\0')
+        char_t code[256];
+
+        i_secret_part(password, TRUE, code, sizeof(code));
+        if (code[0] == '\0')
             return FALSE;
-        i_json_escape(value, sizeof(value), password);
+        i_json_escape(value, sizeof(value), code);
         bstd_sprintf(request, sizeof(request),
                      "{\"@type\":\"checkAuthenticationCode\",\"code\":\"%s\"}", value);
         td_json_client_send(client, request);
@@ -356,9 +392,12 @@ static bool_t i_send_auth_request(struct TdJson *client, const char_t *state,
     }
     if (strcmp(state, "authorizationStateWaitPassword") == 0)
     {
-        if (password == NULL || password[0] == '\0')
+        char_t secret[256];
+
+        i_secret_part(password, FALSE, secret, sizeof(secret));
+        if (secret[0] == '\0')
             return FALSE;
-        i_json_escape(value, sizeof(value), password);
+        i_json_escape(value, sizeof(value), secret);
         bstd_sprintf(request, sizeof(request),
                      "{\"@type\":\"checkAuthenticationPassword\",\"password\":\"%s\"}", value);
         td_json_client_send(client, request);
@@ -411,7 +450,7 @@ static void i_process_chat(TelegramBackend *backend, const char_t *json)
 
     chat = strstr(json, "\"chat\"");
     if (chat == NULL)
-        return;
+        chat = json;
     if (i_has(chat, "chatTypeSecret") == TRUE)
         return;
     if (i_json_string(chat, "id", id, sizeof(id)) == FALSE || id[0] == '\0')
@@ -480,15 +519,17 @@ static void i_process_response(TelegramBackend *backend, struct TdJson *client,
         }
         else
         {
-            i_send_auth_request(client, state, backend->identity, backend->password,
-                                backend->api_id, backend->api_hash);
+            if (i_send_auth_request(client, state, backend->identity, backend->password,
+                                    backend->api_id, backend->api_hash,
+                                    "calantas-telegram") == FALSE)
+                i_connection_event(backend, "Telegram login code or password required");
         }
         return;
     }
 
     if (i_json_string(json, "@type", type, sizeof(type)) == FALSE)
         return;
-    if (strcmp(type, "updateNewChat") == 0)
+    if (strcmp(type, "updateNewChat") == 0 || strcmp(type, "chat") == 0)
         i_process_chat(backend, json);
     else if (strcmp(type, "updateNewMessage") == 0)
         i_process_message(backend, json);
@@ -602,7 +643,8 @@ struct _tg_test_state_t
 
 static void i_test_step(TgTestState *state, struct TdJson *client, const char_t *json,
                         const char_t *identity, const char_t *password,
-                        const char_t *api_id, const char_t *api_hash)
+                        const char_t *api_id, const char_t *api_hash,
+                        const char_t *database_directory)
 {
     char_t auth_state[80];
 
@@ -613,7 +655,8 @@ static void i_test_step(TgTestState *state, struct TdJson *client, const char_t 
         state->ready = TRUE;
         return;
     }
-    if (i_send_auth_request(client, auth_state, identity, password, api_id, api_hash) == FALSE)
+    if (i_send_auth_request(client, auth_state, identity, password, api_id, api_hash,
+                            database_directory) == FALSE)
         state->waiting = TRUE;
 }
 
@@ -719,7 +762,8 @@ bool_t cal_telegram_test_connection(const char_t *identity, const char_t *passwo
 
         state.elapsed += 100;
         if (response != NULL)
-            i_test_step(&state, client, response, identity, password, api_id, api_hash);
+            i_test_step(&state, client, response, identity, password, api_id, api_hash,
+                        "calantas-telegram-test");
     }
 
     success = state.ready;
@@ -790,7 +834,12 @@ bool_t cal_telegram_add_buddy(TelegramBackend *backend, const char_t *chat_id,
 
     if (backend == NULL || chat_id == NULL || chat_id[0] == '\0')
         return FALSE;
-    for (i = 0; chat_id[i] != '\0'; i += 1)
+    i = 0;
+    if (chat_id[i] == '-')
+        i += 1;
+    if (chat_id[i] == '\0')
+        return FALSE;
+    for (; chat_id[i] != '\0'; i += 1)
     {
         if (chat_id[i] < '0' || chat_id[i] > '9')
             return FALSE;

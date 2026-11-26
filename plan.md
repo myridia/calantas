@@ -34,6 +34,7 @@ Implemented:
 - Optional XMPP backend with libstrophe: TLS/SASL login, roster, presence, direct messages, worker thread and event queue.
 - Permanent `account.json` for a list of XMPP accounts with marker, JID, password, server and auto-connect checkbox, with credentials prefilled in the XMPP account dialog, a connection test button and a single **Manage account** menu entry that opens a table with Add, Edit, Delete and Close buttons.
 - Setup task for the full SDK/backend dependency set, including TDLib and the HTTP/JSON libraries needed later.
+- Optional Telegram backend with TDLib's JSON C API: phone/bot-token/code/2FA login, chats, text messages, worker thread and event queue.
 
 Verified by the user:
 
@@ -53,6 +54,7 @@ Not verified yet:
 - macOS rebuild with the updated `src/CMakeLists.txt`.
 - Manual UI checks on macOS and Windows.
 - Full GitHub Actions release uploads.
+- Telegram backend build, login, chats and messages.
 
 ## Architecture
 
@@ -63,6 +65,8 @@ src/backend.c    messenger model and state files
 src/backend.h    only interface the GUI is allowed to use
 src/xmpp.c       optional libstrophe worker thread and event queue
 src/xmpp.h       private interface between backend.c and the XMPP backend
+src/telegram.c   optional TDLib JSON worker thread and event queue
+src/telegram.h   private interface between backend.c and the Telegram backend
 ```
 
 Rules:
@@ -83,7 +87,7 @@ Rules:
 
 3. Add local persistence. Done.
    - Account name, own status, buddies and recent messages are saved as text.
-   - `account.json` under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows holds a list of XMPP accounts with marker, JID, password, server and auto-connect flag. Each marker has its own state file: `state-xmpp.txt` for `XMPP`, otherwise `state-xmpp-MARKER.txt`, holding status, buddies and recent messages. The password is plain text with user-only permissions on Unix.
+   - `account.json` under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows holds a list of accounts with name, protocol, JID/identity, password/code, server, Telegram API ID/hash and auto-connect flag. Each account has its own state file: `state-xmpp.txt` / `state-xmpp-NAME.txt` or `state-telegram.txt` / `state-telegram-NAME.txt`, holding status, buddies and recent messages. Secrets are plain text with user-only permissions on Unix.
 
 4. Add XMPP core with libstrophe. Implemented, not verified by the user yet.
    - Marked JID/password accounts in the Manage accounts dialog, with one **Manage account** menu entry and account switching by double-clicking a table row.
@@ -98,11 +102,13 @@ Rules:
    - Channels as conversations.
    - Simple send/receive.
 
-6. Add Telegram with TDLib.
+6. Add Telegram with TDLib. Implemented, optional build.
    - Use the TDLib JSON C API.
    - Poll updates on a worker/ticker boundary.
-   - Phone/code/2FA login.
-   - Contacts, chats and messages.
+   - Phone/bot-token/code/2FA login; the password field accepts `code` or `code:2FA-password`.
+   - Contacts, chats and text messages.
+   - Temporary real connection test with a separate TDLib test database.
+   - Optional build: the app builds without `tdjson` but cannot connect to Telegram.
 
 7. Add ActivityPub via Mastodon-compatible API.
    - Actor handle as buddy.
@@ -148,7 +154,7 @@ Binary:
 build/Release/bin/calantas
 ```
 
-CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix. Setup scripts clone the NAppGUI source into `~/.cache/calantas/nappgui_src` so the repository stays clean. The XMPP backend is enabled only when libstrophe is found; use `-DCALANTAS_ENABLE_XMPP=OFF` to disable XMPP detection. The app will build but cannot connect.
+CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix. Setup scripts clone the NAppGUI source into `~/.cache/calantas/nappgui_src` so the repository stays clean. Each backend is enabled only when its library is found. Use `-DCALANTAS_ENABLE_XMPP=OFF` or `-DCALANTAS_ENABLE_TELEGRAM=OFF` to disable detection, or `-DCALANTAS_REQUIRE_XMPP=ON` / `-DCALANTAS_REQUIRE_TELEGRAM=ON` to make a missing library a configuration error. The app still builds when a backend is absent, but that protocol cannot connect.
 
 ## Workflow files
 
@@ -220,3 +226,21 @@ Next steps when returning:
    - add a temporary libstrophe logger to `xmpp.c` if needed;
    - check `~/.config/calantas/account.json` for the account list with `name`, `jid`, `password`, `server` and `auto_connect`, and `state-xmpp.txt` / `state-xmpp-MARKER.txt` for buddy records.
 7. After successful tests, update the "Verified by the user" and "Not verified yet" lists near the top of this file.
+
+## Telegram checkpoint — 2026-11-26
+
+- `CMakeLists.txt` detects `tdjson` through `pkg-config` or library search and exposes `CALANTAS_ENABLE_TELEGRAM`, `CALANTAS_REQUIRE_TELEGRAM` and `CALANTAS_TELEGRAM_TARGET`.
+- `src/telegram.c` / `src/telegram.h` use the TDLib JSON C API on a worker thread, with auth-state handling, chats, incoming text messages, outgoing sends and a connection test client.
+- `CalAccount` gained `protocol`, `api_id` and `api_hash`; existing XMPP accounts default to XMPP and keep their old state paths.
+- Telegram state lives in `state-telegram.txt` or `state-telegram-NAME.txt`; XMPP state paths are unchanged.
+- The account dialog has a protocol selector. Telegram identity is a phone number or bot token; the password field takes a login code, or `code:2FA-password` when two-step verification is enabled.
+- Telegram Test uses a separate TDLib database directory so it does not conflict with an active login.
+
+Verification when returning:
+
+1. Clean and rebuild. Configure should show `Telegram backend: enabled (...)` when `tdjson` is installed.
+2. Add a Telegram account with API ID/hash from `my.telegram.org/apps`, a phone number and the first login code. Save should connect and the status line should become `Telegram connected`.
+3. With two-step verification, use `code:2FA-password` in the password field.
+4. Verify chats appear in the buddy list, incoming text messages open/update conversations and outgoing messages are sent.
+5. Add an XMPP account and switch between the two accounts from the Manage accounts table to confirm separate rosters and messages.
+6. If the bot-token flow is used, put `123456:TOKEN` in the identity field and leave the password field empty.

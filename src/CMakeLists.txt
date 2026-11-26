@@ -5,3 +5,8 @@ if(CALANTAS_XMPP_TARGET)
   target_compile_definitions(calantas PRIVATE CALANTAS_HAVE_XMPP=1)
   target_link_libraries(calantas ${CALANTAS_XMPP_TARGET})
 endif()
+
+if(CALANTAS_TELEGRAM_TARGET)
+  target_compile_definitions(calantas PRIVATE CALANTAS_HAVE_TELEGRAM=1)
+  target_link_libraries(calantas ${CALANTAS_TELEGRAM_TARGET})
+endif()
