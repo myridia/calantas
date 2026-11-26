@@ -301,6 +301,36 @@ static void i_safe_marker(char_t *out, const uint32_t size, const char_t *marker
     out[n] = '\0';
 }
 
+static void i_account_default_name(const CalAccount *account, char_t *out, const uint32_t size)
+{
+    const char_t *jid;
+    uint32_t n = 0;
+
+    if (out == NULL || size == 0)
+        return;
+    if (account != NULL && account->name[0] != '\0')
+    {
+        if (out != account->name)
+            bstd_sprintf(out, size, "%s", account->name);
+        return;
+    }
+
+    jid = account != NULL ? account->jid : NULL;
+    if (jid != NULL && jid[0] != '\0')
+    {
+        while (jid[n] != '\0' && jid[n] != '@' && n + 1 < size)
+        {
+            out[n] = jid[n];
+            n += 1;
+        }
+        out[n] = '\0';
+        if (out[0] != '\0')
+            return;
+    }
+
+    bstd_sprintf(out, size, "%s", "XMPP");
+}
+
 static bool_t i_state_path(char_t *out, const uint32_t size, const char_t *marker)
 {
     char_t dir[1024];
@@ -747,12 +777,26 @@ static bool_t i_read_legacy_account(CalAccount *account)
     return account->jid[0] != '\0' || account->password[0] != '\0';
 }
 
-static void i_push_account(AccountStore *store, CalAccount *current, bool_t *have_current)
+static void i_push_account(AccountStore *store, CalAccount *current, bool_t *have_current,
+                           bool_t *changed)
 {
-    if (*have_current == TRUE && store->count < CALANTAS_MAX_ACCOUNTS
-        && (current->name[0] != '\0' || current->jid[0] != '\0'
-            || current->password[0] != '\0' || current->server[0] != '\0'))
-        store->accounts[store->count++] = *current;
+    if (*have_current == TRUE && store->count < CALANTAS_MAX_ACCOUNTS)
+    {
+        if (current->jid[0] != '\0' || current->password[0] != '\0')
+        {
+            if (current->name[0] == '\0')
+            {
+                i_account_default_name(current, current->name, sizeof(current->name));
+                if (changed != NULL)
+                    *changed = TRUE;
+            }
+            store->accounts[store->count++] = *current;
+        }
+        else if (changed != NULL)
+        {
+            *changed = TRUE;
+        }
+    }
     memset(current, 0, sizeof(*current));
     *have_current = FALSE;
 }
@@ -794,7 +838,7 @@ static bool_t i_load_account_store(AccountStore *store)
                 continue;
             if (i_json_read_string(line, "name", current.name, sizeof(current.name)) == TRUE)
             {
-                i_push_account(store, &current, &have_current);
+                i_push_account(store, &current, &have_current, &changed);
                 have_current = TRUE;
                 continue;
             }
@@ -813,12 +857,17 @@ static bool_t i_load_account_store(AccountStore *store)
             i_json_read_bool(line, "auto_connect", &current.auto_connect);
         }
         fclose(file);
-        i_push_account(store, &current, &have_current);
+        i_push_account(store, &current, &have_current, &changed);
     }
 
     if (store->count > 0 && i_find_account(store, store->active) == CALANTAS_MAX_ACCOUNTS)
     {
         bstd_sprintf(store->active, sizeof(store->active), "%s", store->accounts[0].name);
+        changed = TRUE;
+    }
+    else if (store->count == 0 && store->active[0] != '\0')
+    {
+        store->active[0] = '\0';
         changed = TRUE;
     }
 
@@ -895,11 +944,12 @@ static bool_t i_save_active_account(const Backend *backend)
         return FALSE;
 
     memset(&account, 0, sizeof(account));
-    bstd_sprintf(account.name, sizeof(account.name), "%s",
-                 backend->account_marker[0] != '\0' ? backend->account_marker : "XMPP");
     bstd_sprintf(account.jid, sizeof(account.jid), "%s", backend->jid);
     bstd_sprintf(account.password, sizeof(account.password), "%s", backend->password);
     bstd_sprintf(account.server, sizeof(account.server), "%s", backend->server);
+    bstd_sprintf(account.name, sizeof(account.name), "%s", backend->account_marker);
+    if (account.name[0] == '\0')
+        i_account_default_name(&account, account.name, sizeof(account.name));
     account.auto_connect = backend->auto_connect;
 
     index = i_find_account(&store, store.active);
@@ -1201,7 +1251,7 @@ bool_t cal_backend_account_save(const CalAccount *account, const bool_t activate
 
     copy = *account;
     if (copy.name[0] == '\0')
-        bstd_sprintf(copy.name, sizeof(copy.name), "%s", "XMPP");
+        i_account_default_name(&copy, copy.name, sizeof(copy.name));
 
     if (activate == TRUE && store.active[0] != '\0'
         && strcmp(store.active, copy.name) != 0)
@@ -1251,7 +1301,7 @@ bool_t cal_backend_account_replace(const char_t *old_name, const CalAccount *acc
 
     copy = *account;
     if (copy.name[0] == '\0')
-        bstd_sprintf(copy.name, sizeof(copy.name), "%s", "XMPP");
+        i_account_default_name(&copy, copy.name, sizeof(copy.name));
 
     index = i_find_account(&store, old_name);
     if (index == CALANTAS_MAX_ACCOUNTS && store.count < CALANTAS_MAX_ACCOUNTS)
