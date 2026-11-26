@@ -18,13 +18,14 @@ The user builds and runs:
 ./run.sh
 ```
 
-`build.sh` configures CMake, builds Release and launches `build/Release/bin/calantas`. NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows; `NAPPGUI_DIR` overrides the SDK prefix. CMake also defaults `nappgui_DIR` to `<prefix>/cmake`. Setup scripts clone NAppGUI source into `~/.cache/calantas/nappgui_src`, not into the repository. The XMPP backend is built only when libstrophe is detected; set `-DCALANTAS_ENABLE_XMPP=OFF` to disable detection.
+`build.sh` configures CMake, builds Release and launches `build/Release/bin/calantas`. NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows; `NAPPGUI_DIR` overrides the SDK prefix. CMake also defaults `nappgui_DIR` to `<prefix>/cmake`. Setup scripts clone NAppGUI source into `~/.cache/calantas/nappgui_src`, not into the repository. The XMPP backend is built only when libstrophe is detected; set `-DCALANTAS_ENABLE_XMPP=OFF` to disable detection. The Telegram backend is built only when TDLib's `tdjson` is detected; set `-DCALANTAS_ENABLE_TELEGRAM=OFF` to disable detection.
 
 ## Structure
 - `src/main.c` — `osmain_sync` entry point and 0.25s ticker
 - `src/gui.c` / `src/gui.h` — buddy list, conversation windows, menus and dialogs
 - `src/backend.c` / `src/backend.h` — account/buddy/message model and text state persistence
 - `src/xmpp.c` / `src/xmpp.h` — optional libstrophe backend with worker thread and event queue
+- `src/telegram.c` / `src/telegram.h` — optional TDLib JSON backend with worker thread and event queue
 - `src/res/` — icons
 - `CMakeLists.txt` — NAppGUI package lookup and project setup
 - `src/CMakeLists.txt` — `nap_desktop_app`
@@ -40,10 +41,11 @@ The user builds and runs:
 ## Architecture
 - The GUI depends only on `backend.h`.
 - The XMPP backend uses libstrophe on a worker thread; it handles TLS/SASL login, roster, presence and direct messages, and pushes events to the GUI thread.
-- `account.json` keeps a list of XMPP accounts with marker, JID, password, server and auto-connect flag. `cal_backend_store()` / `cal_backend_restore()` keep status, buddies and recent messages in `state-xmpp.txt` for the `XMPP` marker or `state-xmpp-MARKER.txt` for other markers under the user config directory. The password is stored in plain text with user-only permissions on Unix.
+- The Telegram backend uses TDLib's JSON C API on a worker thread; it handles phone/bot-token/code/2FA login, chats and text messages, and pushes events to the GUI thread.
+- `account.json` keeps a list of accounts with name, protocol, JID/identity, password/code, server, Telegram API ID/hash and auto-connect flag. `cal_backend_store()` / `cal_backend_restore()` keep status, buddies and recent messages in `state-xmpp.txt` / `state-xmpp-NAME.txt` or `state-telegram.txt` / `state-telegram-NAME.txt` under the user config directory. Secrets are stored in plain text with user-only permissions on Unix.
 - `calantas_update()` polls backend events on the NAppGUI ticker.
 - Conversation windows are one per buddy, created on demand; they track the buddy handle so roster reordering does not retarget them.
-- Planned backends: IRC, Telegram with TDLib, ActivityPub via Mastodon API, then raw ActivityPub.
+- Planned backends: IRC, ActivityPub via Mastodon API, then raw ActivityPub.
 - No libpurple3 adapter.
 
 ## Conventions
