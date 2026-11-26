@@ -45,7 +45,7 @@ The binary is written to `build/Release/bin/calantas`.
 
 NAppGUI is expected in `/usr/local/nappgui` on Linux/macOS and `C:/nappgui` on Windows. Override the SDK location with `NAPPGUI_DIR=/path/to/nappgui`. Setup tasks clone the NAppGUI source into `~/.cache/calantas/nappgui_src`, outside the repository, so the project stays clean.
 
-The XMPP and Telegram backends are optional at build time. CMake detects libstrophe and `tdjson` through `pkg-config` or a normal library search. Without a backend library, Calantas still builds but that protocol cannot connect.
+The XMPP and Telegram backends are optional at build time. CMake detects libstrophe and `tdjson` through `pkg-config` or a normal library search. Detected library directories are added to the executable's RPATH so the build can run without extra `LD_LIBRARY_PATH` settings. Without a backend library, Calantas still builds but that protocol cannot connect.
 
 Run task **7** in `./ask.sh` to install only the XMPP dependencies, or task **8** to install everything Calantas needs. Task 8 installs NAppGUI plus libstrophe, TDLib, libcurl, cJSON, OpenSSL, Expat, zlib, pkg-config and the build tools for the current platform. IRC needs no extra library.
 

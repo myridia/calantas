@@ -286,6 +286,31 @@ static bool_t i_is_bot_token(const char_t *text)
     return p > text && *p == ':' && p[1] != '\0' ? TRUE : FALSE;
 }
 
+static uint32_t i_hash_text(const char_t *text, uint32_t hash)
+{
+    const unsigned char *p;
+
+    if (text == NULL)
+        return hash;
+    for (p = (const unsigned char *)text; *p != '\0'; p += 1)
+    {
+        hash ^= *p;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static void i_test_database(char_t *out, const uint32_t size, const char_t *identity,
+                            const char_t *api_id, const char_t *api_hash)
+{
+    uint32_t hash = 2166136261u;
+
+    hash = i_hash_text(identity, hash);
+    hash = i_hash_text(api_id, hash);
+    hash = i_hash_text(api_hash, hash);
+    bstd_sprintf(out, size, "calantas-telegram-test-%08x", (unsigned int)hash);
+}
+
 static void i_secret_part(const char_t *secret, const bool_t first, char_t *out,
                           const uint32_t size)
 {
@@ -499,6 +524,43 @@ static void i_process_message(TelegramBackend *backend, const char_t *json)
     i_push_event(backend, &event);
 }
 
+static void i_request_chats(struct TdJson *client, const char_t *json)
+{
+    const char_t *p;
+    char_t request[512];
+    char_t id[64];
+    uint32_t n;
+
+    p = i_find_key(json, "chat_ids");
+    if (p == NULL)
+        return;
+    p = strchr(p, '[');
+    if (p == NULL)
+        return;
+
+    while (*p != '\0' && *p != ']')
+    {
+        if (*p != '-' && (*p < '0' || *p > '9'))
+        {
+            p += 1;
+            continue;
+        }
+
+        n = 0;
+        if (*p == '-' && n + 1 < sizeof(id))
+            id[n++] = *p++;
+        while (*p >= '0' && *p <= '9' && n + 1 < sizeof(id))
+            id[n++] = *p++;
+        id[n] = '\0';
+        if (id[0] != '\0')
+        {
+            bstd_sprintf(request, sizeof(request),
+                         "{\"@type\":\"getChat\",\"chat_id\":\"%s\"}", id);
+            td_json_client_send(client, request);
+        }
+    }
+}
+
 static void i_process_response(TelegramBackend *backend, struct TdJson *client,
                                const char_t *json)
 {
@@ -531,6 +593,8 @@ static void i_process_response(TelegramBackend *backend, struct TdJson *client,
         return;
     if (strcmp(type, "updateNewChat") == 0 || strcmp(type, "chat") == 0)
         i_process_chat(backend, json);
+    else if (strcmp(type, "chats") == 0)
+        i_request_chats(client, json);
     else if (strcmp(type, "updateNewMessage") == 0)
         i_process_message(backend, json);
 }
@@ -576,9 +640,8 @@ static void i_process_outgoing(TelegramBackend *backend, struct TdJson *client)
     }
 }
 
-static uint32_t i_thread_main(void *data)
+static uint32_t i_thread_main(TelegramBackend *backend)
 {
-    TelegramBackend *backend = (TelegramBackend *)data;
     struct TdJson *client;
     bool_t running = TRUE;
 
@@ -743,6 +806,7 @@ bool_t cal_telegram_test_connection(const char_t *identity, const char_t *passwo
 #if CALANTAS_HAVE_TELEGRAM
     struct TdJson *client;
     TgTestState state;
+    char_t database[96];
     bool_t success = FALSE;
 
     if (identity == NULL || identity[0] == '\0'
@@ -750,6 +814,7 @@ bool_t cal_telegram_test_connection(const char_t *identity, const char_t *passwo
         || api_hash == NULL || api_hash[0] == '\0')
         return FALSE;
 
+    i_test_database(database, sizeof(database), identity, api_id, api_hash);
     memset(&state, 0, sizeof(state));
     client = td_json_client_create();
     if (client == NULL)
@@ -763,7 +828,7 @@ bool_t cal_telegram_test_connection(const char_t *identity, const char_t *passwo
         state.elapsed += 100;
         if (response != NULL)
             i_test_step(&state, client, response, identity, password, api_id, api_hash,
-                        "calantas-telegram-test");
+                        database);
     }
 
     success = state.ready;

@@ -23,6 +23,7 @@ include("${NAPPGUI_ROOT_PATH}/prj/NAppProject.cmake")
 include("${NAPPGUI_ROOT_PATH}/prj/NAppCompilers.cmake")
 
 set(CALANTAS_XMPP_TARGET "")
+set(CALANTAS_XMPP_RPATH "")
 
 if(CALANTAS_ENABLE_XMPP)
   find_package(PkgConfig QUIET)
@@ -32,6 +33,7 @@ if(CALANTAS_ENABLE_XMPP)
 
   if(TARGET PkgConfig::PC_STROPHE)
     set(CALANTAS_XMPP_TARGET PkgConfig::PC_STROPHE)
+    set(CALANTAS_XMPP_RPATH "${PC_STROPHE_LIBRARY_DIRS}")
   else()
     find_path(STROPHE_INCLUDE_DIR NAMES strophe.h)
     find_library(STROPHE_LIBRARY NAMES strophe libstrophe)
@@ -48,6 +50,7 @@ if(CALANTAS_ENABLE_XMPP)
         IMPORTED_LOCATION "${STROPHE_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${STROPHE_INCLUDE_DIR}"
         INTERFACE_LINK_LIBRARIES "${STROPHE_EXTRA_LIBS}")
+      get_filename_component(CALANTAS_XMPP_RPATH "${STROPHE_LIBRARY}" DIRECTORY)
       set(CALANTAS_XMPP_TARGET calantas_libstrophe)
     endif()
   endif()
@@ -68,6 +71,7 @@ else()
 endif()
 
 set(CALANTAS_TELEGRAM_TARGET "")
+set(CALANTAS_TELEGRAM_RPATH "")
 
 if(CALANTAS_ENABLE_TELEGRAM)
   find_package(PkgConfig QUIET)
@@ -77,6 +81,7 @@ if(CALANTAS_ENABLE_TELEGRAM)
 
   if(TARGET PkgConfig::PC_TDJSON)
     set(CALANTAS_TELEGRAM_TARGET PkgConfig::PC_TDJSON)
+    set(CALANTAS_TELEGRAM_RPATH "${PC_TDJSON_LIBRARY_DIRS}")
   else()
     find_library(TDJSON_LIBRARY NAMES tdjson libtdjson)
     if(TDJSON_LIBRARY)
@@ -97,6 +102,7 @@ if(CALANTAS_ENABLE_TELEGRAM)
       set_target_properties(calantas_tdjson PROPERTIES
         IMPORTED_LOCATION "${TDJSON_LIBRARY}"
         INTERFACE_LINK_LIBRARIES "${TDJSON_EXTRA_LIBS}")
+      get_filename_component(CALANTAS_TELEGRAM_RPATH "${TDJSON_LIBRARY}" DIRECTORY)
       set(CALANTAS_TELEGRAM_TARGET calantas_tdjson)
     endif()
   endif()

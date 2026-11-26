@@ -1205,12 +1205,6 @@ static cal_status_t i_parse_status(const char_t *text)
     }
 }
 
-static uint32_t i_parse_u32(const char_t *text, const uint32_t max)
-{
-    unsigned long value = strtoul(text, NULL, 10);
-    return value > (unsigned long)max ? max : (uint32_t)value;
-}
-
 static void i_write_string(FILE *file, const char_t *prefix, const char_t *text)
 {
     fputs(prefix, file);
