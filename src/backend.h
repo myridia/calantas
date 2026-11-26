@@ -51,9 +51,12 @@ typedef struct _cal_event_t
 typedef struct _cal_account_t
 {
     char_t name[64];
+    char_t protocol[16];
     char_t jid[128];
     char_t password[128];
     char_t server[128];
+    char_t api_id[32];
+    char_t api_hash[64];
     bool_t auto_connect;
 } CalAccount;
 
@@ -62,8 +65,13 @@ typedef struct _backend_t Backend;
 Backend *cal_backend_create(void);
 void cal_backend_destroy(Backend **backend);
 bool_t cal_backend_xmpp_available(void);
-bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *password, const char_t *server);
-bool_t cal_backend_test_connection(const char_t *jid, const char_t *password, const char_t *server);
+bool_t cal_backend_telegram_available(void);
+bool_t cal_backend_connect(Backend *backend, const char_t *protocol, const char_t *jid,
+                           const char_t *password, const char_t *server,
+                           const char_t *api_id, const char_t *api_hash);
+bool_t cal_backend_test_connection(const char_t *protocol, const char_t *jid,
+                                   const char_t *password, const char_t *server,
+                                   const char_t *api_id, const char_t *api_hash);
 bool_t cal_backend_is_connected(const Backend *backend);
 const char_t *cal_backend_connection_text(const Backend *backend);
 uint32_t cal_backend_buddy_count(const Backend *backend);
@@ -80,6 +88,9 @@ const char_t *cal_backend_account_name(const Backend *backend);
 const char_t *cal_backend_account_jid(const Backend *backend);
 const char_t *cal_backend_account_server(const Backend *backend);
 const char_t *cal_backend_account_password(const Backend *backend);
+const char_t *cal_backend_protocol(const Backend *backend);
+const char_t *cal_backend_api_id(const Backend *backend);
+const char_t *cal_backend_api_hash(const Backend *backend);
 bool_t cal_backend_set_auto_connect(Backend *backend, const bool_t auto_connect);
 bool_t cal_backend_auto_connect(const Backend *backend);
 uint32_t cal_backend_accounts(CalAccount *out, const uint32_t max);

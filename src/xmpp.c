@@ -852,3 +852,19 @@ bool_t cal_xmpp_add_buddy(XmppBackend *backend, const char_t *jid, const char_t 
     bstd_sprintf(item.name, sizeof(item.name), "%s", name != NULL ? name : "");
     return i_push_out(backend, &item);
 }
+
+bool_t cal_xmpp_disconnect(XmppBackend *backend)
+{
+#if CALANTAS_HAVE_XMPP
+    if (backend == NULL)
+        return FALSE;
+    i_stop_thread(backend);
+    bmutex_lock(backend->mutex);
+    backend->connected = FALSE;
+    bmutex_unlock(backend->mutex);
+    return TRUE;
+#else
+    unref(backend);
+    return FALSE;
+#endif
+}

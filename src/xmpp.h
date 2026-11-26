@@ -55,5 +55,6 @@ bool_t cal_xmpp_pop_event(XmppBackend *backend, CalXmppEvent *event);
 bool_t cal_xmpp_send(XmppBackend *backend, const char_t *jid, const char_t *text);
 bool_t cal_xmpp_set_status(XmppBackend *backend, const cal_status_t status, const char_t *text);
 bool_t cal_xmpp_add_buddy(XmppBackend *backend, const char_t *jid, const char_t *name);
+bool_t cal_xmpp_disconnect(XmppBackend *backend);
 
 #endif
