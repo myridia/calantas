@@ -705,12 +705,14 @@ static uint32_t i_find_account(const AccountStore *store, const char_t *name)
 static bool_t i_save_account_store(const AccountStore *store)
 {
     char_t path[1200];
+    char_t temp[1220];
     FILE *file;
     uint32_t i;
 
     if (store == NULL || i_account_path(path, sizeof(path)) == FALSE)
         return FALSE;
-    file = fopen(path, "wb");
+    bstd_sprintf(temp, sizeof(temp), "%s.tmp", path);
+    file = fopen(temp, "wb");
     if (file == NULL)
         return FALSE;
 
@@ -736,7 +738,19 @@ static bool_t i_save_account_store(const AccountStore *store)
     fputs("  ]\n}\n", file);
     fclose(file);
 #if !defined(_WIN32)
-    chmod(path, 0600);
+    chmod(temp, 0600);
+    if (rename(temp, path) != 0)
+    {
+        remove(temp);
+        return FALSE;
+    }
+#else
+    remove(path);
+    if (rename(temp, path) != 0)
+    {
+        remove(temp);
+        return FALSE;
+    }
 #endif
     return TRUE;
 }
@@ -764,7 +778,9 @@ static bool_t i_read_legacy_account(CalAccount *account)
         nfields = i_split_fields(line, fields, 8);
         if (nfields < 2)
             continue;
-        if (strcmp(fields[0], "C") == 0)
+        if (strcmp(fields[0], "K") == 0)
+            bstd_sprintf(account->name, sizeof(account->name), "%s", fields[1]);
+        else if (strcmp(fields[0], "C") == 0)
             account->auto_connect = strcmp(fields[1], "1") == 0 ? TRUE : FALSE;
         else if (strcmp(fields[0], "J") == 0)
             bstd_sprintf(account->jid, sizeof(account->jid), "%s", fields[1]);
@@ -799,6 +815,16 @@ static void i_push_account(AccountStore *store, CalAccount *current, bool_t *hav
     }
     memset(current, 0, sizeof(*current));
     *have_current = FALSE;
+}
+
+static void i_legacy_start(CalAccount *current, bool_t *have_current, bool_t *legacy_json)
+{
+    if (*have_current == FALSE)
+    {
+        bstd_sprintf(current->name, sizeof(current->name), "%s", "XMPP");
+        *have_current = TRUE;
+        *legacy_json = TRUE;
+    }
 }
 
 static bool_t i_load_account_store(AccountStore *store)
@@ -842,19 +868,26 @@ static bool_t i_load_account_store(AccountStore *store)
                 have_current = TRUE;
                 continue;
             }
-            if (have_current == FALSE)
-            {
-                bstd_sprintf(current.name, sizeof(current.name), "%s", "XMPP");
-                have_current = TRUE;
-                legacy_json = TRUE;
-            }
             if (i_json_read_string(line, "jid", current.jid, sizeof(current.jid)) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
                 continue;
+            }
             if (i_json_read_string(line, "password", current.password, sizeof(current.password)) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
                 continue;
+            }
             if (i_json_read_string(line, "server", current.server, sizeof(current.server)) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
                 continue;
-            i_json_read_bool(line, "auto_connect", &current.auto_connect);
+            }
+            if (i_json_read_bool(line, "auto_connect", &current.auto_connect) == TRUE)
+            {
+                i_legacy_start(&current, &have_current, &legacy_json);
+                continue;
+            }
         }
         fclose(file);
         i_push_account(store, &current, &have_current, &changed);
@@ -884,6 +917,21 @@ static bool_t i_load_account_store(AccountStore *store)
                 bstd_sprintf(store->accounts[0].password, sizeof(store->accounts[0].password), "%s", legacy.password);
             if (store->accounts[0].server[0] == '\0')
                 bstd_sprintf(store->accounts[0].server, sizeof(store->accounts[0].server), "%s", legacy.server);
+            if (store->accounts[0].name[0] == '\0')
+                bstd_sprintf(store->accounts[0].name, sizeof(store->accounts[0].name), "%s", legacy.name);
+        }
+    }
+    else if (store->count == 0 && store->active[0] != '\0')
+    {
+        CalAccount legacy;
+
+        if (i_read_legacy_account(&legacy) == TRUE)
+        {
+            store->accounts[0] = legacy;
+            store->count = 1;
+            if (i_find_account(store, store->active) == CALANTAS_MAX_ACCOUNTS)
+                bstd_sprintf(store->active, sizeof(store->active), "%s", legacy.name);
+            changed = TRUE;
         }
     }
 
