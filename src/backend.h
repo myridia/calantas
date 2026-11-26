@@ -89,6 +89,7 @@ bool_t cal_backend_account_replace(const char_t *old_name, const CalAccount *acc
                                    const bool_t activate);
 bool_t cal_backend_account_delete(const char_t *name);
 const char_t *cal_backend_active_account(const Backend *backend);
+bool_t cal_backend_apply_active(Backend *backend);
 bool_t cal_backend_select_account(Backend *backend, const char_t *name);
 bool_t cal_backend_store(const Backend *backend);
 bool_t cal_backend_restore(Backend *backend);

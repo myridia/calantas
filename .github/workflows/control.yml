@@ -39,6 +39,6 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-  linux:   { if: "github.repository_owner == 'myridia' || github.repository_owner == 'veto8'", needs: tag, uses: ./.github/workflows/linux.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
-  mac:     { if: "github.repository_owner == 'myridia' || github.repository_owner == 'veto8'", needs: tag, uses: ./.github/workflows/mac.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
-  windows: { if: "github.repository_owner == 'myridia' || github.repository_owner == 'veto8'", needs: tag, uses: ./.github/workflows/windows.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
+  linux:   { if: "github.repository_owner == 'myridia'" , needs: tag, uses: ./.github/workflows/linux.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
+  mac:     { if: "github.repository_owner == 'myridia'" , needs: tag, uses: ./.github/workflows/mac.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }
+  windows: { if: "github.repository_owner == 'myridia'" , needs: tag, uses: ./.github/workflows/windows.yml, secrets: inherit, with: { tag: "${{ needs.tag.outputs.tag }}" } }

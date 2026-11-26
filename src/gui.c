@@ -731,19 +731,21 @@ static void i_manager_refresh(AccountManager *form)
     active = cal_backend_active_account(form->app->backend);
     for (i = 0; i < form->count; i += 1)
     {
-        if (active != NULL && strcmp(active, form->accounts[i].name) == 0)
-            bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "* %s",
-                         form->accounts[i].name);
+        const char_t *name = form->accounts[i].name[0] != '\0'
+                                 ? form->accounts[i].name : "(unnamed)";
+
+        if (active != NULL && active[0] != '\0' && strcmp(active, form->accounts[i].name) == 0)
+            bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "* %s", name);
         else
-            bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "%s",
-                         form->accounts[i].name);
+            bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "%s", name);
     }
 
+    form->selected = CALANTAS_MAX_ACCOUNTS;
     tableview_deselect_all(form->table);
     tableview_update(form->table);
     bstd_sprintf(text, sizeof(text),
                  "Active: %s | %u account(s) | Double-click a row to switch",
-                 active != NULL && active[0] != '\0' ? active : "none",
+                 form->count > 0 && active != NULL && active[0] != '\0' ? active : "none",
                  (unsigned int)form->count);
     label_text(form->status, text);
 }
@@ -751,15 +753,34 @@ static void i_manager_refresh(AccountManager *form)
 static uint32_t i_manager_selected(const AccountManager *form)
 {
     const ArrSt(uint32_t) *selected = tableview_selected(form->table);
+    uint32_t row;
+
+    if (form->selected < form->count)
+        return form->selected;
+
+    row = tableview_get_focus_row(form->table);
+    if (row < form->count)
+        return row;
 
     if (selected != NULL && arrst_size(selected, uint32_t) > 0)
     {
-        uint32_t row = *arrst_get_const(selected, 0, uint32_t);
+        row = *arrst_get_const(selected, 0, uint32_t);
         if (row < form->count)
             return row;
     }
 
     return CALANTAS_MAX_ACCOUNTS;
+}
+
+static void i_manager_focus_row(AccountManager *form, const uint32_t row)
+{
+    if (row >= form->count)
+        return;
+
+    form->selected = row;
+    tableview_select(form->table, &row, 1);
+    tableview_focus_row(form->table, row, ekCENTER);
+    window_focus(form->window, guicontrol(form->table));
 }
 
 static void i_manager_activate(AccountManager *form, const uint32_t row)
@@ -835,15 +856,40 @@ static void i_OnManagerTableData(AccountManager *form, Event *e)
     }
 }
 
+static void i_OnManagerSelect(AccountManager *form, Event *e)
+{
+    const EvTbSel *sel = event_params(e, EvTbSel);
+    char_t text[160];
+
+    if (sel != NULL && sel->sel != NULL && arrst_size(sel->sel, uint32_t) > 0)
+    {
+        uint32_t row = *arrst_get_const(sel->sel, 0, uint32_t);
+        if (row < form->count)
+        {
+            form->selected = row;
+            bstd_sprintf(text, sizeof(text), "Selected: %s | Double-click to switch",
+                         form->accounts[row].name);
+            label_text(form->status, text);
+        }
+    }
+
+    unref(e);
+}
+
 static void i_OnManagerRowClick(AccountManager *form, Event *e)
 {
     static time_t last_click = 0;
     static uint32_t last_row = CALANTAS_MAX_ACCOUNTS;
     const EvTbRow *p = event_params(e, EvTbRow);
+    char_t text[160];
     time_t now = time(NULL);
 
     if (p != NULL && p->row < form->count)
     {
+        form->selected = p->row;
+        bstd_sprintf(text, sizeof(text), "Selected: %s | Double-click to switch",
+                     form->accounts[p->row].name);
+        label_text(form->status, text);
         if (last_row == p->row && now - last_click <= 1)
         {
             i_manager_activate(form, p->row);
@@ -872,18 +918,26 @@ static void i_OnManagerEdit(AccountManager *form, Event *e)
     uint32_t row = i_manager_selected(form);
 
     if (row == CALANTAS_MAX_ACCOUNTS)
+    {
         label_text(form->status, "Select an account to edit.");
-    else if (i_open_account_form(form->app, form->window, &form->accounts[row],
-                                 form->accounts[row].name, FALSE) == TRUE)
-        i_manager_refresh(form);
+    }
+    else
+    {
+        i_manager_focus_row(form, row);
+        if (i_open_account_form(form->app, form->window, &form->accounts[row],
+                                form->accounts[row].name, FALSE) == TRUE)
+            i_manager_refresh(form);
+    }
 
     unref(e);
 }
 
 static void i_OnManagerDelete(AccountManager *form, Event *e)
 {
-    uint32_t row = i_manager_selected(form);
+    uint32_t row;
 
+    label_text(form->status, "Deleting...");
+    row = i_manager_selected(form);
     if (row == CALANTAS_MAX_ACCOUNTS)
     {
         label_text(form->status, "Select an account to delete.");
@@ -894,8 +948,10 @@ static void i_OnManagerDelete(AccountManager *form, Event *e)
     {
         CalAccount accounts[CALANTAS_MAX_ACCOUNTS];
         char_t name[64];
+        char_t text[96];
         bool_t was_active;
 
+        i_manager_focus_row(form, row);
         bstd_sprintf(name, sizeof(name), "%s", form->accounts[row].name);
         was_active = strcmp(cal_backend_active_account(form->app->backend), name) == 0;
         if (cal_backend_account_delete(name) == FALSE)
@@ -906,6 +962,7 @@ static void i_OnManagerDelete(AccountManager *form, Event *e)
         }
 
         cal_backend_store(form->app->backend);
+        cal_backend_apply_active(form->app->backend);
         if (was_active == TRUE)
         {
             uint32_t count = cal_backend_accounts(accounts, CALANTAS_MAX_ACCOUNTS);
@@ -914,6 +971,8 @@ static void i_OnManagerDelete(AccountManager *form, Event *e)
         }
         i_rebuild_rows(form->app);
         i_manager_refresh(form);
+        bstd_sprintf(text, sizeof(text), "Deleted %s.", name);
+        label_text(form->status, text);
         i_set_status(form->app, "Account deleted");
     }
 
@@ -935,7 +994,7 @@ static void i_OnManageAccounts(App *app, Event *e)
     Label *status = label_create();
     Button *add = button_push();
     Button *edit = button_push();
-    Button *del = button_push();
+    Button *delete_button = button_push();
     Button *close = button_push();
     Panel *panel = panel_create();
     AccountManager form;
@@ -945,11 +1004,13 @@ static void i_OnManageAccounts(App *app, Event *e)
     form.table = table;
     form.status = status;
     form.count = 0;
+    form.selected = CALANTAS_MAX_ACCOUNTS;
     memset(form.accounts, 0, sizeof(form.accounts));
     memset(form.labels, 0, sizeof(form.labels));
 
     window_title(window, "Manage accounts");
     tableview_OnData(table, listener(&form, i_OnManagerTableData, AccountManager));
+    tableview_OnSelect(table, listener(&form, i_OnManagerSelect, AccountManager));
     tableview_OnRowClick(table, listener(&form, i_OnManagerRowClick, AccountManager));
     tableview_row_height(table, 26);
     tableview_header_resizable(table, TRUE);
@@ -976,15 +1037,15 @@ static void i_OnManageAccounts(App *app, Event *e)
     label_text(status, "");
     button_text(add, "Add");
     button_text(edit, "Edit");
-    button_text(del, "Delete");
+    button_text(delete_button, "Delete");
     button_text(close, "Close");
     button_width(add, 90);
     button_width(edit, 90);
-    button_width(del, 90);
+    button_width(delete_button, 90);
     button_width(close, 90);
     button_OnClick(add, listener(&form, i_OnManagerAdd, AccountManager));
     button_OnClick(edit, listener(&form, i_OnManagerEdit, AccountManager));
-    button_OnClick(del, listener(&form, i_OnManagerDelete, AccountManager));
+    button_OnClick(delete_button, listener(&form, i_OnManagerDelete, AccountManager));
     button_OnClick(close, listener(&form, i_OnManagerClose, AccountManager));
 
     layout_tableview(layout, table, 0, 0);
@@ -992,7 +1053,7 @@ static void i_OnManageAccounts(App *app, Event *e)
     layout_layout(layout, footer, 0, 2);
     layout_button(footer, add, 0, 0);
     layout_button(footer, edit, 1, 0);
-    layout_button(footer, del, 2, 0);
+    layout_button(footer, delete_button, 2, 0);
     layout_button(footer, close, 3, 0);
     layout_hexpand(layout, 0);
     layout_vexpand(layout, 0);
@@ -1009,6 +1070,8 @@ static void i_OnManageAccounts(App *app, Event *e)
     window_panel(window, panel);
     window_client_size(window, s2df(720, 360));
     window_defbutton(window, close);
+    window_hotkey(window, ekKEY_SUPR, 0, listener(&form, i_OnManagerDelete, AccountManager));
+    window_hotkey(window, ekKEY_BACK, 0, listener(&form, i_OnManagerDelete, AccountManager));
     i_manager_refresh(&form);
 
     window_modal(window, app->window);
