@@ -111,11 +111,49 @@ static void i_connection_event(XmppBackend *backend, const char_t *text)
     i_push_event(backend, &event);
 }
 
+#if CALANTAS_HAVE_XMPP
+static Mutex *i_xmpp_lib_mutex = NULL;
+static uint32_t i_xmpp_lib_users = 0;
+
+static Mutex *i_xmpp_lib_mutex_get(void)
+{
+    if (i_xmpp_lib_mutex == NULL)
+        i_xmpp_lib_mutex = bmutex_create();
+    return i_xmpp_lib_mutex;
+}
+
+static void i_xmpp_lib_init(void)
+{
+    Mutex *mutex = i_xmpp_lib_mutex_get();
+
+    bmutex_lock(mutex);
+    if (i_xmpp_lib_users == 0)
+        xmpp_initialize();
+    i_xmpp_lib_users += 1;
+    bmutex_unlock(mutex);
+}
+
+static void i_xmpp_lib_done(void)
+{
+    Mutex *mutex = i_xmpp_lib_mutex_get();
+
+    bmutex_lock(mutex);
+    if (i_xmpp_lib_users > 0)
+        i_xmpp_lib_users -= 1;
+    if (i_xmpp_lib_users == 0)
+        xmpp_shutdown();
+    bmutex_unlock(mutex);
+}
+#endif
+
 XmppBackend *cal_xmpp_create(void)
 {
     XmppBackend *backend = heap_new0(XmppBackend);
 
     backend->mutex = bmutex_create();
+#if CALANTAS_HAVE_XMPP
+    i_xmpp_lib_mutex_get();
+#endif
     backend->status = ekCAL_AVAILABLE;
     bstd_sprintf(backend->status_text, sizeof(backend->status_text), "%s", "Available");
     return backend;
@@ -319,6 +357,10 @@ static int i_out_handler(xmpp_ctx_t *ctx, void *userdata)
     return 1;
 }
 
+static int i_iq_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata);
+static int i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata);
+static int i_presence_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *userdata);
+
 static void i_conn_handler(xmpp_conn_t *conn, xmpp_conn_event_t event,
                            int error, xmpp_stream_error_t *stream_error,
                            void *userdata)
@@ -339,6 +381,9 @@ static void i_conn_handler(xmpp_conn_t *conn, xmpp_conn_event_t event,
         status = backend->status;
         bstd_sprintf(status_text, sizeof(status_text), "%s", backend->status_text);
         bmutex_unlock(backend->mutex);
+        xmpp_handler_add(conn, i_message_handler, NULL, "message", NULL, backend);
+        xmpp_handler_add(conn, i_presence_handler, NULL, "presence", NULL, backend);
+        xmpp_handler_add(conn, i_iq_handler, NULL, "iq", NULL, backend);
         i_connection_event(backend, "XMPP connected");
         i_send_presence(backend, status, status_text);
         i_request_roster(backend);
@@ -408,21 +453,28 @@ static int i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *use
     XmppBackend *backend = (XmppBackend *)userdata;
     xmpp_ctx_t *ctx = xmpp_conn_get_context(conn);
     const char_t *from = xmpp_stanza_get_from(stanza);
+    const char_t *type = xmpp_stanza_get_type(stanza);
     xmpp_stanza_t *body;
-    const char_t *text;
+    char_t *text;
     char_t *bare;
     CalXmppEvent event;
 
     if (from == NULL)
+        return 1;
+    if (type != NULL && strcmp(type, "error") == 0)
         return 1;
 
     body = xmpp_stanza_get_child_by_name(stanza, "body");
     if (body == NULL)
         return 1;
 
-    text = xmpp_stanza_get_text_ptr(body);
+    text = xmpp_stanza_get_text(body);
     if (text == NULL || text[0] == '\0')
+    {
+        if (text != NULL)
+            xmpp_free(ctx, text);
         return 1;
+    }
 
     bare = xmpp_jid_bare(ctx, from);
     memset(&event, 0, sizeof(event));
@@ -430,6 +482,7 @@ static int i_message_handler(xmpp_conn_t *conn, xmpp_stanza_t *stanza, void *use
     bstd_sprintf(event.jid, sizeof(event.jid), "%s", bare != NULL ? bare : from);
     bstd_sprintf(event.text, sizeof(event.text), "%s", text);
     i_push_event(backend, &event);
+    xmpp_free(ctx, text);
     if (bare != NULL)
         xmpp_free(ctx, bare);
 
@@ -516,12 +569,12 @@ static uint32_t i_thread_main(void *data)
     xmpp_ctx_t *ctx;
     xmpp_conn_t *conn;
 
-    xmpp_initialize();
+    i_xmpp_lib_init();
 
     ctx = xmpp_ctx_new(NULL, NULL);
     if (ctx == NULL)
     {
-        xmpp_shutdown();
+        i_xmpp_lib_done();
         return 1;
     }
 
@@ -529,7 +582,7 @@ static uint32_t i_thread_main(void *data)
     if (conn == NULL)
     {
         xmpp_ctx_free(ctx);
-        xmpp_shutdown();
+        i_xmpp_lib_done();
         return 1;
     }
 
@@ -543,9 +596,6 @@ static uint32_t i_thread_main(void *data)
     xmpp_conn_set_jid(conn, jid);
     xmpp_conn_set_pass(conn, password);
 
-    xmpp_handler_add(conn, i_message_handler, NULL, "message", NULL, backend);
-    xmpp_handler_add(conn, i_presence_handler, NULL, "presence", NULL, backend);
-    xmpp_handler_add(conn, i_iq_handler, NULL, "iq", NULL, backend);
     xmpp_global_timed_handler_add(ctx, i_out_handler, 500, backend);
     xmpp_global_timed_handler_add(ctx, i_stop_handler, 500, backend);
 
@@ -565,7 +615,7 @@ static uint32_t i_thread_main(void *data)
 
     xmpp_conn_release(conn);
     xmpp_ctx_free(ctx);
-    xmpp_shutdown();
+    i_xmpp_lib_done();
     return 0;
 }
 
@@ -627,6 +677,107 @@ bool_t cal_xmpp_connect(XmppBackend *backend, const char_t *jid, const char_t *p
     return TRUE;
 #else
     i_connection_event(backend, "XMPP unavailable: build with libstrophe");
+    return FALSE;
+#endif
+}
+
+#if CALANTAS_HAVE_XMPP
+
+typedef struct _test_state_t TestState;
+
+struct _test_state_t
+{
+    bool_t done;
+    bool_t success;
+    uint32_t elapsed;
+};
+
+static void i_test_conn_handler(xmpp_conn_t *conn, xmpp_conn_event_t event,
+                                int error, xmpp_stream_error_t *stream_error,
+                                void *userdata)
+{
+    TestState *state = (TestState *)userdata;
+
+    unref(conn);
+    unref(error);
+    unref(stream_error);
+
+    if (state == NULL)
+        return;
+    if (event == XMPP_CONN_CONNECT)
+        state->success = TRUE;
+    state->done = TRUE;
+}
+
+static int i_test_timed_handler(xmpp_ctx_t *ctx, void *userdata)
+{
+    TestState *state = (TestState *)userdata;
+
+    if (state == NULL)
+    {
+        xmpp_stop(ctx);
+        return 0;
+    }
+
+    state->elapsed += 500;
+    if (state->done == TRUE || state->elapsed >= 10000)
+    {
+        xmpp_stop(ctx);
+        return 0;
+    }
+    return 1;
+}
+
+#endif
+
+bool_t cal_xmpp_test_connection(const char_t *jid, const char_t *password, const char_t *server)
+{
+#if CALANTAS_HAVE_XMPP
+    TestState state;
+    xmpp_ctx_t *ctx;
+    xmpp_conn_t *conn;
+    bool_t success = FALSE;
+
+    if (jid == NULL || jid[0] == '\0')
+        return FALSE;
+
+    memset(&state, 0, sizeof(state));
+    i_xmpp_lib_init();
+    ctx = xmpp_ctx_new(NULL, NULL);
+    if (ctx == NULL)
+    {
+        i_xmpp_lib_done();
+        return FALSE;
+    }
+
+    conn = xmpp_conn_new(ctx);
+    if (conn == NULL)
+    {
+        xmpp_ctx_free(ctx);
+        i_xmpp_lib_done();
+        return FALSE;
+    }
+
+    xmpp_conn_set_flags(conn, XMPP_CONN_FLAG_MANDATORY_TLS);
+    xmpp_conn_set_jid(conn, jid);
+    xmpp_conn_set_pass(conn, password != NULL ? password : "");
+    xmpp_global_timed_handler_add(ctx, i_test_timed_handler, 500, &state);
+
+    if (xmpp_connect_client(conn, server != NULL && server[0] != '\0' ? server : NULL,
+                            0, i_test_conn_handler, &state) == 0)
+    {
+        xmpp_run(ctx);
+        success = state.success;
+    }
+
+    xmpp_conn_release(conn);
+    xmpp_ctx_free(ctx);
+    i_xmpp_lib_done();
+    return success;
+#else
+    unref(jid);
+    unref(password);
+    unref(server);
     return FALSE;
 #endif
 }

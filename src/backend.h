@@ -6,12 +6,7 @@
 #define CALANTAS_MAX_TEXT 512
 #define CALANTAS_MAX_MESSAGES 128
 #define CALANTAS_MAX_BUDDIES 64
-
-typedef enum _cal_backend_kind_t
-{
-    ekCAL_BACKEND_LOCAL = 0,
-    ekCAL_BACKEND_XMPP
-} cal_backend_kind_t;
+#define CALANTAS_MAX_ACCOUNTS 16
 
 typedef enum _cal_status_t
 {
@@ -53,13 +48,22 @@ typedef struct _cal_event_t
     char_t text[256];
 } CalEvent;
 
+typedef struct _cal_account_t
+{
+    char_t name[64];
+    char_t jid[128];
+    char_t password[128];
+    char_t server[128];
+    bool_t auto_connect;
+} CalAccount;
+
 typedef struct _backend_t Backend;
 
-Backend *cal_backend_create(const cal_backend_kind_t kind);
+Backend *cal_backend_create(void);
 void cal_backend_destroy(Backend **backend);
-cal_backend_kind_t cal_backend_kind(const Backend *backend);
 bool_t cal_backend_xmpp_available(void);
 bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *password, const char_t *server);
+bool_t cal_backend_test_connection(const char_t *jid, const char_t *password, const char_t *server);
 bool_t cal_backend_is_connected(const Backend *backend);
 const char_t *cal_backend_connection_text(const Backend *backend);
 uint32_t cal_backend_buddy_count(const Backend *backend);
@@ -76,6 +80,17 @@ const char_t *cal_backend_account_name(const Backend *backend);
 const char_t *cal_backend_account_jid(const Backend *backend);
 const char_t *cal_backend_account_server(const Backend *backend);
 const char_t *cal_backend_account_password(const Backend *backend);
+bool_t cal_backend_set_auto_connect(Backend *backend, const bool_t auto_connect);
+bool_t cal_backend_auto_connect(const Backend *backend);
+uint32_t cal_backend_accounts(CalAccount *out, const uint32_t max);
+bool_t cal_backend_account_get(const char_t *name, CalAccount *out);
+bool_t cal_backend_account_save(const CalAccount *account, const bool_t activate);
+bool_t cal_backend_account_replace(const char_t *old_name, const CalAccount *account,
+                                   const bool_t activate);
+bool_t cal_backend_account_delete(const char_t *name);
+const char_t *cal_backend_active_account(const Backend *backend);
+bool_t cal_backend_apply_active(Backend *backend);
+bool_t cal_backend_select_account(Backend *backend, const char_t *name);
 bool_t cal_backend_store(const Backend *backend);
 bool_t cal_backend_restore(Backend *backend);
 bool_t cal_backend_poll(Backend *backend, CalEvent *event);

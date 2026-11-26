@@ -8,13 +8,17 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define CAL_MAX_CHATS CALANTAS_MAX_BUDDIES
 
 typedef struct _chat_t Chat;
 typedef struct _account_t Account;
+typedef struct _accountmanager_t AccountManager;
 typedef struct _buddyform_t BuddyForm;
 typedef struct _about_t About;
+
+static void i_build_menu(App *app);
 
 struct _chat_t
 {
@@ -31,12 +35,29 @@ struct _account_t
 {
     App *app;
     Window *window;
+    Label *protocol;
     Edit *name;
     Edit *jid;
     Edit *password;
     Edit *server;
     Edit *status;
+    Button *auto_connect;
+    Label *result;
+    char_t original[64];
+    bool_t is_new;
     bool_t accepted;
+};
+
+struct _accountmanager_t
+{
+    App *app;
+    Window *window;
+    TableView *table;
+    Label *status;
+    CalAccount accounts[CALANTAS_MAX_ACCOUNTS];
+    char_t labels[CALANTAS_MAX_ACCOUNTS][80];
+    uint32_t count;
+    uint32_t selected;
 };
 
 struct _buddyform_t
@@ -73,11 +94,34 @@ struct _app_t
 static void i_set_status(App *app, const char_t *text)
 {
     char_t line[256];
+    const char_t *jid;
+    const char_t *marker;
+    const char_t *name;
 
     cassert_no_null(app);
     label_text(app->status, text != NULL ? text : "");
-    bstd_sprintf(line, sizeof(line), "%s - %s", cal_backend_account_name(app->backend),
-                 cal_backend_status_text(app->backend));
+    jid = cal_backend_account_jid(app->backend);
+    marker = cal_backend_active_account(app->backend);
+    name = cal_backend_account_name(app->backend);
+    if (marker != NULL && marker[0] != '\0' && strcmp(marker, name) != 0)
+    {
+        if (jid != NULL && jid[0] != '\0')
+            bstd_sprintf(line, sizeof(line), "%s [%s] <%s> - %s", name, marker, jid,
+                         cal_backend_status_text(app->backend));
+        else
+            bstd_sprintf(line, sizeof(line), "%s [%s] - %s", name, marker,
+                         cal_backend_status_text(app->backend));
+    }
+    else if (jid != NULL && jid[0] != '\0')
+    {
+        bstd_sprintf(line, sizeof(line), "%s <%s> - %s", name, jid,
+                     cal_backend_status_text(app->backend));
+    }
+    else
+    {
+        bstd_sprintf(line, sizeof(line), "%s - %s", name,
+                     cal_backend_status_text(app->backend));
+    }
     label_text(app->account, line);
 }
 
@@ -105,23 +149,6 @@ static uint32_t i_chat_index(App *app, Chat *chat)
     if (chat->index < cal_backend_buddy_count(app->backend))
         return chat->index;
     return CAL_MAX_CHATS;
-}
-
-static Chat *i_chat_for_buddy(App *app, const uint32_t index)
-{
-    const CalBuddy *buddy = cal_backend_buddy(app->backend, index);
-    uint32_t i;
-
-    if (buddy == NULL)
-        return NULL;
-
-    for (i = 0; i < CAL_MAX_CHATS; i += 1)
-    {
-        Chat *chat = app->chats[i];
-        if (chat != NULL && strcmp(chat->handle, buddy->handle) == 0)
-            return chat;
-    }
-    return NULL;
 }
 
 static void i_remove_chat(App *app, Chat *chat)
@@ -447,31 +474,96 @@ static void i_OnMessage(App *app, Event *e)
     unref(e);
 }
 
-static void i_OnAccountOk(Account *form, Event *e)
+static void i_OnTest(Account *form, Event *e)
 {
-    const char_t *name = edit_get_text(form->name);
     const char_t *jid = edit_get_text(form->jid);
     const char_t *password = edit_get_text(form->password);
     const char_t *server = edit_get_text(form->server);
+
+    if (jid == NULL || jid[0] == '\0' || password == NULL || password[0] == '\0')
+        label_text(form->result, "Enter JID and password to test.");
+    else if (cal_backend_xmpp_available() == FALSE)
+        label_text(form->result, "XMPP support is not available in this build.");
+    else
+    {
+        label_text(form->result, "Testing connection...");
+        if (cal_backend_test_connection(jid, password, server) == TRUE)
+            label_text(form->result, "Connected.");
+        else
+            label_text(form->result, "Connection failed or timed out.");
+    }
+
+    unref(e);
+}
+
+static void i_OnAccountOk(Account *form, Event *e)
+{
+    const char_t *name_text = edit_get_text(form->name);
     const char_t *text = edit_get_text(form->status);
+    const char_t *jid_text = edit_get_text(form->jid);
+    const char_t *password_text = edit_get_text(form->password);
+    const char_t *server_text = edit_get_text(form->server);
+    CalAccount account;
+    char_t name[64];
+    char_t jid[128];
+    char_t password[128];
+    char_t server[128];
+    bool_t auto_connect = button_get_state(form->auto_connect) == ekGUI_ON;
     App *app = form->app;
 
-    cal_backend_set_account_name(app->backend, name);
-    cal_backend_set_status(app->backend, cal_backend_status(app->backend), text);
+    bstd_sprintf(name, sizeof(name), "%s", name_text != NULL ? name_text : "");
+    bstd_sprintf(jid, sizeof(jid), "%s", jid_text != NULL ? jid_text : "");
+    bstd_sprintf(password, sizeof(password), "%s", password_text != NULL ? password_text : "");
+    bstd_sprintf(server, sizeof(server), "%s", server_text != NULL ? server_text : "");
 
-    if (cal_backend_kind(app->backend) == ekCAL_BACKEND_XMPP)
+    if (name[0] == '\0')
+        bstd_sprintf(name, sizeof(name), "%s", "XMPP");
+
+    if (jid[0] == '\0' || password[0] == '\0')
     {
-        if (cal_backend_connect(app->backend, jid, password, server) == TRUE)
-            i_set_status(app, "Connecting to XMPP");
-        else
-            i_set_status(app, cal_backend_connection_text(app->backend));
+        label_text(form->result, "Enter JID and password before saving.");
+        unref(e);
+        return;
+    }
+
+    memset(&account, 0, sizeof(account));
+    bstd_sprintf(account.name, sizeof(account.name), "%s", name);
+    bstd_sprintf(account.jid, sizeof(account.jid), "%s", jid);
+    bstd_sprintf(account.password, sizeof(account.password), "%s", password);
+    bstd_sprintf(account.server, sizeof(account.server), "%s", server);
+    account.auto_connect = auto_connect;
+
+    if (form->is_new == TRUE)
+    {
+        if (cal_backend_account_save(&account, TRUE) == FALSE)
+        {
+            label_text(form->result, "Could not save account.json.");
+            unref(e);
+            return;
+        }
     }
     else
     {
-        cal_backend_store(app->backend);
-        i_set_status(app, "Account updated");
+        if (cal_backend_account_replace(form->original, &account, TRUE) == FALSE)
+        {
+            label_text(form->result, "Could not save account.json.");
+            unref(e);
+            return;
+        }
     }
 
+    if (cal_backend_select_account(app->backend, name) == TRUE)
+        i_rebuild_rows(app);
+    cal_backend_set_account_name(app->backend, name);
+    cal_backend_set_status(app->backend, cal_backend_status(app->backend), text);
+    cal_backend_set_auto_connect(app->backend, auto_connect);
+
+    if (cal_backend_connect(app->backend, jid, password, server) == TRUE)
+        i_set_status(app, "XMPP account saved; connecting");
+    else
+        i_set_status(app, cal_backend_connection_text(app->backend));
+
+    label_text(form->result, "Saved to account.json.");
     form->accepted = TRUE;
     window_stop_modal(form->window, 1);
     unref(e);
@@ -484,90 +576,503 @@ static void i_OnAccountCancel(Account *form, Event *e)
     unref(e);
 }
 
-static void i_OnAccount(App *app, Event *e)
+static bool_t i_open_account_form(App *app, Window *parent, const CalAccount *source,
+                                  const char_t *original, const bool_t is_new)
 {
-    bool_t xmpp = cal_backend_kind(app->backend) == ekCAL_BACKEND_XMPP;
     Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
-    Layout *layout = layout_create(2, 6);
-    Layout *buttons = layout_create(2, 1);
+    Layout *layout = layout_create(2, 9);
+    Layout *buttons = layout_create(3, 1);
+    Label *protocol_label = label_create();
+    Label *protocol = label_create();
     Label *name_label = label_create();
     Label *jid_label = label_create();
     Label *password_label = label_create();
     Label *server_label = label_create();
     Label *status_label = label_create();
+    Label *result_label = label_create();
+    Label *result = label_create();
     Edit *name = edit_create();
     Edit *jid = edit_create();
     Edit *password = edit_create();
     Edit *server = edit_create();
     Edit *status = edit_create();
-    Button *ok = button_push();
+    Button *auto_connect = button_check();
+    Button *test = button_push();
+    Button *save = button_push();
     Button *cancel = button_push();
     Panel *panel = panel_create();
+    CalAccount copy;
     char_t title[128];
+    char_t name_value[64];
+    char_t jid_value[128];
+    char_t password_value[128];
+    char_t server_value[128];
+    bool_t auto_value = FALSE;
     Account form;
 
     form.app = app;
     form.window = window;
+    form.protocol = protocol;
     form.name = name;
     form.jid = jid;
     form.password = password;
     form.server = server;
     form.status = status;
+    form.auto_connect = auto_connect;
+    form.result = result;
+    form.is_new = is_new;
     form.accepted = FALSE;
+    bstd_sprintf(form.original, sizeof(form.original), "%s",
+                 original != NULL ? original : "");
 
-    bstd_sprintf(title, sizeof(title), "%s", xmpp ? "XMPP Account" : "Account");
+    memset(&copy, 0, sizeof(copy));
+    if (source != NULL && source->name[0] != '\0')
+        copy = *source;
+    else if (is_new == FALSE
+             && cal_backend_account_get(cal_backend_active_account(app->backend), &copy) == FALSE)
+        memset(&copy, 0, sizeof(copy));
+
+    if (copy.name[0] == '\0')
+        bstd_sprintf(copy.name, sizeof(copy.name), "%s", "XMPP");
+    bstd_sprintf(name_value, sizeof(name_value), "%s", copy.name);
+    bstd_sprintf(jid_value, sizeof(jid_value), "%s", copy.jid);
+    bstd_sprintf(password_value, sizeof(password_value), "%s", copy.password);
+    bstd_sprintf(server_value, sizeof(server_value), "%s", copy.server);
+    auto_value = copy.auto_connect;
+
+    bstd_sprintf(title, sizeof(title), "%s", is_new == TRUE ? "Add XMPP Account" : "Edit XMPP Account");
     window_title(window, title);
-    label_text(name_label, xmpp ? "Display name:" : "Name:");
-    label_text(jid_label, xmpp ? "JID:" : "Address:");
+    label_text(protocol_label, "Protocol:");
+    label_text(protocol, "XMPP");
+    label_text(name_label, "Account marker:");
+    label_text(jid_label, "JID:");
     label_text(password_label, "Password:");
     label_text(server_label, "Server:");
     label_text(status_label, "Status:");
-    edit_text(name, cal_backend_account_name(app->backend));
-    edit_text(jid, cal_backend_account_jid(app->backend));
-    edit_text(password, xmpp ? cal_backend_account_password(app->backend) : "");
-    edit_text(server, cal_backend_account_server(app->backend));
+    label_text(result_label, "Result:");
+    label_text(result, "Not tested");
+    label_multiline(result, TRUE);
+    label_width(result, 300);
+    edit_text(name, name_value);
+    edit_text(jid, jid_value);
+    edit_text(password, password_value);
+    edit_text(server, server_value);
     edit_text(status, cal_backend_status_text(app->backend));
     edit_passmode(password, TRUE);
-    edit_phtext(jid, xmpp ? "user@example.org" : "Optional address");
-    edit_phtext(password, "Saved in the local state file");
+    edit_phtext(jid, "user@example.org");
+    edit_phtext(password, "Saved in account.json");
     edit_phtext(server, "Optional server override");
+    button_text(auto_connect, "Connect automatically on startup (XMPP)");
+    button_state(auto_connect, auto_value == TRUE ? ekGUI_ON : ekGUI_OFF);
     edit_width(name, 300);
     edit_width(jid, 300);
     edit_width(password, 300);
     edit_width(server, 300);
     edit_width(status, 300);
 
-    button_text(ok, "OK");
+    button_text(test, "Test");
+    button_text(save, "Save");
     button_text(cancel, "Cancel");
-    button_OnClick(ok, listener(&form, i_OnAccountOk, Account));
+    button_OnClick(test, listener(&form, i_OnTest, Account));
+    button_OnClick(save, listener(&form, i_OnAccountOk, Account));
     button_OnClick(cancel, listener(&form, i_OnAccountCancel, Account));
 
-    layout_label(layout, name_label, 0, 0);
-    layout_edit(layout, name, 1, 0);
-    layout_label(layout, jid_label, 0, 1);
-    layout_edit(layout, jid, 1, 1);
-    layout_label(layout, password_label, 0, 2);
-    layout_edit(layout, password, 1, 2);
-    layout_label(layout, server_label, 0, 3);
-    layout_edit(layout, server, 1, 3);
-    layout_label(layout, status_label, 0, 4);
-    layout_edit(layout, status, 1, 4);
-    layout_layout(layout, buttons, 1, 5);
-    layout_button(buttons, ok, 0, 0);
-    layout_button(buttons, cancel, 1, 0);
+    layout_label(layout, protocol_label, 0, 0);
+    layout_label(layout, protocol, 1, 0);
+    layout_label(layout, name_label, 0, 1);
+    layout_edit(layout, name, 1, 1);
+    layout_label(layout, jid_label, 0, 2);
+    layout_edit(layout, jid, 1, 2);
+    layout_label(layout, password_label, 0, 3);
+    layout_edit(layout, password, 1, 3);
+    layout_label(layout, server_label, 0, 4);
+    layout_edit(layout, server, 1, 4);
+    layout_label(layout, status_label, 0, 5);
+    layout_edit(layout, status, 1, 5);
+    layout_label(layout, result_label, 0, 6);
+    layout_label(layout, result, 1, 6);
+    layout_button(layout, auto_connect, 1, 7);
+    layout_layout(layout, buttons, 1, 8);
+    layout_button(buttons, test, 0, 0);
+    layout_button(buttons, save, 1, 0);
+    layout_button(buttons, cancel, 2, 0);
     layout_hexpand(buttons, 0);
-    layout_halign(buttons, 0, 0, ekRIGHT);
+    layout_halign(buttons, 0, 0, ekLEFT);
     layout_hmargin(buttons, 0, 6);
+    layout_hmargin(buttons, 1, 6);
     layout_vmargin(layout, 0, 8);
     layout_vmargin(layout, 1, 8);
     layout_vmargin(layout, 2, 8);
     layout_vmargin(layout, 3, 8);
     layout_vmargin(layout, 4, 8);
+    layout_vmargin(layout, 5, 8);
+    layout_vmargin(layout, 6, 8);
+    layout_vmargin(layout, 7, 8);
     layout_margin(layout, 14);
 
     panel_layout(panel, layout);
     window_panel(window, panel);
-    window_defbutton(window, ok);
+    window_client_size(window, s2df(520, 470));
+    window_defbutton(window, save);
+
+    window_modal(window, parent != NULL ? parent : app->window);
+    window_destroy(&window);
+
+    return form.accepted;
+}
+
+static void i_manager_refresh(AccountManager *form)
+{
+    const char_t *active;
+    char_t text[200];
+    uint32_t i;
+
+    form->count = cal_backend_accounts(form->accounts, CALANTAS_MAX_ACCOUNTS);
+    active = cal_backend_active_account(form->app->backend);
+    for (i = 0; i < form->count; i += 1)
+    {
+        const char_t *name = form->accounts[i].name[0] != '\0'
+                                 ? form->accounts[i].name : "(unnamed)";
+
+        if (active != NULL && active[0] != '\0' && strcmp(active, form->accounts[i].name) == 0)
+            bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "* %s", name);
+        else
+            bstd_sprintf(form->labels[i], sizeof(form->labels[i]), "%s", name);
+    }
+
+    form->selected = CALANTAS_MAX_ACCOUNTS;
+    tableview_deselect_all(form->table);
+    tableview_update(form->table);
+    bstd_sprintf(text, sizeof(text),
+                 "Active: %s | %u account(s) | Double-click a row to switch",
+                 form->count > 0 && active != NULL && active[0] != '\0' ? active : "none",
+                 (unsigned int)form->count);
+    label_text(form->status, text);
+}
+
+static uint32_t i_manager_selected(const AccountManager *form)
+{
+    const ArrSt(uint32_t) *selected = tableview_selected(form->table);
+    uint32_t row;
+
+    if (form->selected < form->count)
+        return form->selected;
+
+    row = tableview_get_focus_row(form->table);
+    if (row < form->count)
+        return row;
+
+    if (selected != NULL && arrst_size(selected, uint32_t) > 0)
+    {
+        row = *arrst_get_const(selected, 0, uint32_t);
+        if (row < form->count)
+            return row;
+    }
+
+    return CALANTAS_MAX_ACCOUNTS;
+}
+
+static void i_manager_focus_row(AccountManager *form, const uint32_t row)
+{
+    if (row >= form->count)
+        return;
+
+    form->selected = row;
+    tableview_select(form->table, &row, 1);
+    tableview_focus_row(form->table, row, ekCENTER);
+    window_focus(form->window, guicontrol(form->table));
+}
+
+static void i_manager_activate(AccountManager *form, const uint32_t row)
+{
+    CalAccount account = form->accounts[row];
+    App *app = form->app;
+
+    if (cal_backend_select_account(app->backend, account.name) == TRUE)
+    {
+        i_rebuild_rows(app);
+        if (account.jid[0] != '\0' && account.password[0] != '\0')
+        {
+            if (cal_backend_connect(app->backend, account.jid, account.password,
+                                    account.server) == TRUE)
+                i_set_status(app, "Connecting to XMPP");
+            else
+                i_set_status(app, cal_backend_connection_text(app->backend));
+        }
+        else
+        {
+            i_set_status(app, "Account needs a JID and password.");
+        }
+    }
+    else
+    {
+        i_set_status(app, "Could not select account.");
+    }
+
+    i_manager_refresh(form);
+}
+
+static void i_OnManagerTableData(AccountManager *form, Event *e)
+{
+    switch (event_type(e))
+    {
+    case ekGUI_EVENT_TBL_NROWS:
+        *event_result(e, uint32_t) = form->count;
+        break;
+
+    case ekGUI_EVENT_TBL_CELL:
+    {
+        const EvTbPos *pos = event_params(e, EvTbPos);
+        EvTbCell *cell = event_result(e, EvTbCell);
+
+        cell->align = ekLEFT;
+        cell->text = "";
+        if (pos != NULL && pos->row < form->count)
+        {
+            const CalAccount *account = &form->accounts[pos->row];
+            switch (pos->col)
+            {
+            case 0:
+                cell->text = form->labels[pos->row];
+                break;
+            case 1:
+                cell->text = account->jid;
+                break;
+            case 2:
+                cell->text = account->server;
+                break;
+            case 3:
+                cell->text = account->auto_connect == TRUE ? "Yes" : "No";
+                break;
+            default:
+                break;
+            }
+        }
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+static void i_OnManagerSelect(AccountManager *form, Event *e)
+{
+    const EvTbSel *sel = event_params(e, EvTbSel);
+    char_t text[160];
+
+    if (sel != NULL && sel->sel != NULL && arrst_size(sel->sel, uint32_t) > 0)
+    {
+        uint32_t row = *arrst_get_const(sel->sel, 0, uint32_t);
+        if (row < form->count)
+        {
+            form->selected = row;
+            bstd_sprintf(text, sizeof(text), "Selected: %s | Double-click to switch",
+                         form->accounts[row].name);
+            label_text(form->status, text);
+        }
+    }
+
+    unref(e);
+}
+
+static void i_OnManagerRowClick(AccountManager *form, Event *e)
+{
+    static time_t last_click = 0;
+    static uint32_t last_row = CALANTAS_MAX_ACCOUNTS;
+    const EvTbRow *p = event_params(e, EvTbRow);
+    char_t text[160];
+    time_t now = time(NULL);
+
+    if (p != NULL && p->row < form->count)
+    {
+        form->selected = p->row;
+        bstd_sprintf(text, sizeof(text), "Selected: %s | Double-click to switch",
+                     form->accounts[p->row].name);
+        label_text(form->status, text);
+        if (last_row == p->row && now - last_click <= 1)
+        {
+            i_manager_activate(form, p->row);
+            last_click = 0;
+            last_row = CALANTAS_MAX_ACCOUNTS;
+        }
+        else
+        {
+            last_click = now;
+            last_row = p->row;
+        }
+    }
+
+    unref(e);
+}
+
+static void i_OnManagerAdd(AccountManager *form, Event *e)
+{
+    if (i_open_account_form(form->app, form->window, NULL, "", TRUE) == TRUE)
+        i_manager_refresh(form);
+    unref(e);
+}
+
+static void i_OnManagerEdit(AccountManager *form, Event *e)
+{
+    uint32_t row = i_manager_selected(form);
+
+    if (row == CALANTAS_MAX_ACCOUNTS)
+    {
+        label_text(form->status, "Select an account to edit.");
+    }
+    else
+    {
+        i_manager_focus_row(form, row);
+        if (i_open_account_form(form->app, form->window, &form->accounts[row],
+                                form->accounts[row].name, FALSE) == TRUE)
+            i_manager_refresh(form);
+    }
+
+    unref(e);
+}
+
+static void i_OnManagerDelete(AccountManager *form, Event *e)
+{
+    uint32_t row;
+
+    label_text(form->status, "Deleting...");
+    row = i_manager_selected(form);
+    if (row == CALANTAS_MAX_ACCOUNTS)
+    {
+        label_text(form->status, "Select an account to delete.");
+        unref(e);
+        return;
+    }
+    else
+    {
+        CalAccount accounts[CALANTAS_MAX_ACCOUNTS];
+        char_t name[64];
+        char_t text[96];
+        bool_t was_active;
+
+        i_manager_focus_row(form, row);
+        bstd_sprintf(name, sizeof(name), "%s", form->accounts[row].name);
+        was_active = strcmp(cal_backend_active_account(form->app->backend), name) == 0;
+        if (cal_backend_account_delete(name) == FALSE)
+        {
+            label_text(form->status, "Could not delete account.");
+            unref(e);
+            return;
+        }
+
+        cal_backend_store(form->app->backend);
+        cal_backend_apply_active(form->app->backend);
+        if (was_active == TRUE)
+        {
+            uint32_t count = cal_backend_accounts(accounts, CALANTAS_MAX_ACCOUNTS);
+            if (count > 0)
+                cal_backend_select_account(form->app->backend, accounts[0].name);
+        }
+        i_rebuild_rows(form->app);
+        i_manager_refresh(form);
+        bstd_sprintf(text, sizeof(text), "Deleted %s.", name);
+        label_text(form->status, text);
+        i_set_status(form->app, "Account deleted");
+    }
+
+    unref(e);
+}
+
+static void i_OnManagerClose(AccountManager *form, Event *e)
+{
+    window_stop_modal(form->window, 0);
+    unref(e);
+}
+
+static void i_OnManageAccounts(App *app, Event *e)
+{
+    Window *window = window_create(ekWINDOW_TITLE | ekWINDOW_CLOSE | ekWINDOW_ESC);
+    Layout *layout = layout_create(4, 3);
+    Layout *footer = layout_create(4, 1);
+    TableView *table = tableview_create();
+    Label *status = label_create();
+    Button *add = button_push();
+    Button *edit = button_push();
+    Button *delete_button = button_push();
+    Button *close = button_push();
+    Panel *panel = panel_create();
+    AccountManager form;
+
+    form.app = app;
+    form.window = window;
+    form.table = table;
+    form.status = status;
+    form.count = 0;
+    form.selected = CALANTAS_MAX_ACCOUNTS;
+    memset(form.accounts, 0, sizeof(form.accounts));
+    memset(form.labels, 0, sizeof(form.labels));
+
+    window_title(window, "Manage accounts");
+    tableview_OnData(table, listener(&form, i_OnManagerTableData, AccountManager));
+    tableview_OnSelect(table, listener(&form, i_OnManagerSelect, AccountManager));
+    tableview_OnRowClick(table, listener(&form, i_OnManagerRowClick, AccountManager));
+    tableview_row_height(table, 26);
+    tableview_header_resizable(table, TRUE);
+    tableview_header_clickable(table, FALSE);
+    tableview_multisel(table, FALSE, FALSE);
+    tableview_add_column_text(table);
+    tableview_header_title(table, 0, "Account");
+    tableview_column_width(table, 0, 150);
+    tableview_column_limits(table, 0, 80, 300);
+    tableview_add_column_text(table);
+    tableview_header_title(table, 1, "JID");
+    tableview_column_width(table, 1, 220);
+    tableview_column_limits(table, 1, 120, 400);
+    tableview_add_column_text(table);
+    tableview_header_title(table, 2, "Server");
+    tableview_column_width(table, 2, 180);
+    tableview_column_limits(table, 2, 100, 360);
+    tableview_add_column_text(table);
+    tableview_header_title(table, 3, "Auto-connect");
+    tableview_column_width(table, 3, 120);
+    tableview_column_limits(table, 3, 90, 180);
+    tableview_size(table, s2df(670, 220));
+
+    label_text(status, "");
+    button_text(add, "Add");
+    button_text(edit, "Edit");
+    button_text(delete_button, "Delete");
+    button_text(close, "Close");
+    button_width(add, 90);
+    button_width(edit, 90);
+    button_width(delete_button, 90);
+    button_width(close, 90);
+    button_OnClick(add, listener(&form, i_OnManagerAdd, AccountManager));
+    button_OnClick(edit, listener(&form, i_OnManagerEdit, AccountManager));
+    button_OnClick(delete_button, listener(&form, i_OnManagerDelete, AccountManager));
+    button_OnClick(close, listener(&form, i_OnManagerClose, AccountManager));
+
+    layout_tableview(layout, table, 0, 0);
+    layout_label(layout, status, 0, 1);
+    layout_layout(layout, footer, 0, 2);
+    layout_button(footer, add, 0, 0);
+    layout_button(footer, edit, 1, 0);
+    layout_button(footer, delete_button, 2, 0);
+    layout_button(footer, close, 3, 0);
+    layout_hexpand(layout, 0);
+    layout_vexpand(layout, 0);
+    layout_hexpand(footer, 0);
+    layout_halign(footer, 3, 0, ekRIGHT);
+    layout_hmargin(footer, 1, 6);
+    layout_hmargin(footer, 2, 6);
+    layout_hmargin(footer, 3, 6);
+    layout_vmargin(layout, 0, 8);
+    layout_vmargin(layout, 1, 8);
+    layout_margin(layout, 14);
+
+    panel_layout(panel, layout);
+    window_panel(window, panel);
+    window_client_size(window, s2df(720, 360));
+    window_defbutton(window, close);
+    window_hotkey(window, ekKEY_SUPR, 0, listener(&form, i_OnManagerDelete, AccountManager));
+    window_hotkey(window, ekKEY_BACK, 0, listener(&form, i_OnManagerDelete, AccountManager));
+    i_manager_refresh(&form);
 
     window_modal(window, app->window);
     window_destroy(&window);
@@ -694,65 +1199,6 @@ static void i_OnOnlineOnly(App *app, Event *e)
     unref(e);
 }
 
-static void i_set_backend(App *app, const cal_backend_kind_t kind)
-{
-    Backend *next;
-    uint32_t i;
-
-    if (cal_backend_kind(app->backend) == kind)
-        return;
-
-    cal_backend_store(app->backend);
-    for (i = 0; i < CAL_MAX_CHATS; i += 1)
-    {
-        Chat *chat = app->chats[i];
-        if (chat != NULL)
-        {
-            window_destroy(&chat->window);
-            heap_delete(&app->chats[i], Chat);
-        }
-    }
-    cal_backend_destroy(&app->backend);
-
-    next = cal_backend_create(kind);
-    cal_backend_restore(next);
-    app->backend = next;
-    i_rebuild_rows(app);
-    i_refresh_table(app);
-
-    if (kind == ekCAL_BACKEND_XMPP)
-    {
-        if (cal_backend_xmpp_available() == FALSE)
-            i_set_status(app, "XMPP unavailable; build with libstrophe");
-        else if (cal_backend_account_jid(app->backend)[0] != '\0'
-                 && cal_backend_account_password(app->backend)[0] != '\0')
-        {
-            if (cal_backend_connect(app->backend, cal_backend_account_jid(app->backend),
-                                    cal_backend_account_password(app->backend),
-                                    cal_backend_account_server(app->backend)) == TRUE)
-                i_set_status(app, "Connecting to XMPP");
-            else
-                i_set_status(app, cal_backend_connection_text(app->backend));
-        }
-        else
-            i_set_status(app, "XMPP selected; open Account to connect");
-    }
-    else
-        i_set_status(app, "Local backend selected");
-}
-
-static void i_OnLocalBackend(App *app, Event *e)
-{
-    i_set_backend(app, ekCAL_BACKEND_LOCAL);
-    unref(e);
-}
-
-static void i_OnXmppBackend(App *app, Event *e)
-{
-    i_set_backend(app, ekCAL_BACKEND_XMPP);
-    unref(e);
-}
-
 static void i_OnAboutClose(About *about, Event *e)
 {
     window_stop_modal(about->window, 1);
@@ -812,8 +1258,6 @@ static void i_build_menu(App *app)
     MenuItem *show_all = menuitem_create();
     MenuItem *accounts = menuitem_create();
     Menu *accounts_sub = menu_create();
-    MenuItem *local_backend = menuitem_create();
-    MenuItem *xmpp_backend = menuitem_create();
     MenuItem *account_item = menuitem_create();
     MenuItem *status = menuitem_create();
     Menu *status_sub = menu_create();
@@ -843,16 +1287,8 @@ static void i_build_menu(App *app)
     menu_add_item(menu, contacts);
 
     menuitem_text(accounts, "Accounts");
-    menuitem_text(local_backend, "Use Local Backend");
-    menuitem_text(xmpp_backend, "Use XMPP Backend");
-    menuitem_OnClick(local_backend, listener(app, i_OnLocalBackend, App));
-    menuitem_OnClick(xmpp_backend, listener(app, i_OnXmppBackend, App));
-    menuitem_enabled(xmpp_backend, cal_backend_xmpp_available());
-    menuitem_text(account_item, "Account...");
-    menuitem_OnClick(account_item, listener(app, i_OnAccount, App));
-    menu_add_item(accounts_sub, local_backend);
-    menu_add_item(accounts_sub, xmpp_backend);
-    menu_add_item(accounts_sub, menuitem_separator());
+    menuitem_text(account_item, "Manage account");
+    menuitem_OnClick(account_item, listener(app, i_OnManageAccounts, App));
     menu_add_item(accounts_sub, account_item);
 
     menuitem_text(status, "Status");
@@ -869,9 +1305,9 @@ static void i_build_menu(App *app)
     menu_add_item(status_sub, busy);
     menu_add_item(status_sub, offline);
     menuitem_submenu(status, &status_sub);
-    menu_add_item(accounts_sub, status);
     menuitem_submenu(accounts, &accounts_sub);
     menu_add_item(menu, accounts);
+    menu_add_item(menu, status);
 
     menuitem_text(help, "Help");
     menuitem_text(about, "About Calantas");
@@ -920,7 +1356,7 @@ App *calantas_create(void)
     Label *filter_label = label_create();
     Panel *panel;
 
-    app->backend = cal_backend_create(ekCAL_BACKEND_LOCAL);
+    app->backend = cal_backend_create();
     app->show_offline = TRUE;
     cal_backend_restore(app->backend);
 
@@ -977,7 +1413,22 @@ App *calantas_create(void)
 
     label_multiline(app->status, TRUE);
     i_rebuild_rows(app);
-    i_set_status(app, "Ready");
+
+    if (cal_backend_auto_connect(app->backend) == TRUE
+        && cal_backend_account_jid(app->backend)[0] != '\0'
+        && cal_backend_account_password(app->backend)[0] != '\0')
+    {
+        if (cal_backend_connect(app->backend, cal_backend_account_jid(app->backend),
+                                cal_backend_account_password(app->backend),
+                                cal_backend_account_server(app->backend)) == TRUE)
+            i_set_status(app, "Connecting to XMPP");
+        else
+            i_set_status(app, cal_backend_connection_text(app->backend));
+    }
+    else
+    {
+        i_set_status(app, "Ready");
+    }
 
     layout_button(toolbar, app->message, 0, 0);
     layout_button(toolbar, app->add, 1, 0);
@@ -1038,15 +1489,17 @@ void calantas_destroy(App **app)
 void calantas_update(App *app, const real64_t prtime, const real64_t ctime)
 {
     CalEvent event;
+    uint32_t i;
 
     while (cal_backend_poll(app->backend, &event) == TRUE)
     {
-        Chat *chat = i_chat_for_buddy(app, event.buddy);
-
         i_rebuild_rows(app);
         i_refresh_table(app);
-        if (chat != NULL)
-            i_refresh_chat(chat);
+        for (i = 0; i < CAL_MAX_CHATS; i += 1)
+        {
+            if (app->chats[i] != NULL)
+                i_refresh_chat(app->chats[i]);
+        }
         cal_backend_store(app->backend);
 
         if (event.text[0] != '\0')

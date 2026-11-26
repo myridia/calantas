@@ -49,6 +49,7 @@ XmppBackend *cal_xmpp_create(void);
 void cal_xmpp_destroy(XmppBackend **backend);
 bool_t cal_xmpp_available(void);
 bool_t cal_xmpp_connect(XmppBackend *backend, const char_t *jid, const char_t *password, const char_t *server);
+bool_t cal_xmpp_test_connection(const char_t *jid, const char_t *password, const char_t *server);
 bool_t cal_xmpp_is_connected(const XmppBackend *backend);
 bool_t cal_xmpp_pop_event(XmppBackend *backend, CalXmppEvent *event);
 bool_t cal_xmpp_send(XmppBackend *backend, const char_t *jid, const char_t *text);

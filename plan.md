@@ -21,18 +21,18 @@ Implemented:
 - `osmain_sync` app ticker.
 - Classic buddy list window with search/filter.
 - One conversation window per buddy.
-- Account dialog and Add Buddy dialog.
+- Manage accounts dialog and Add Buddy dialog.
 - Status menu: Available, Away, Busy, Offline.
 - Contacts menu: online-only/all buddies.
 - About dialog and platform-style menus.
-- Mock/local backend with initial buddies, presence, sent messages and delayed local replies.
+- XMPP backend with buddies, presence and sent messages through libstrophe.
 - Linux, macOS and Windows GitHub Actions workflows with release uploads.
 - README logo, `AGENTS.md`, build scripts, `ask.sh` and project-map entry.
 - `ask.sh` fallbacks for missing `ask.d/` scripts.
 - macOS build support in `build.sh` and `run.sh`, including `.app` bundles.
 - Local persistence of account name, own status, buddies and recent messages in text state files under the user config directory.
 - Optional XMPP backend with libstrophe: TLS/SASL login, roster, presence, direct messages, worker thread and event queue.
-- Saved XMPP JID and password with automatic connect when the XMPP backend is selected.
+- Permanent `account.json` for a list of XMPP accounts with marker, JID, password, server and auto-connect checkbox, with credentials prefilled in the XMPP account dialog, a connection test button and a single **Manage account** menu entry that opens a table with Add, Edit, Delete and Close buttons.
 - Setup task for the full SDK/backend dependency set, including TDLib and the HTTP/JSON libraries needed later.
 
 Verified by the user:
@@ -44,12 +44,12 @@ Verified by the user:
 - Linux XMPP-enabled build succeeded after changing `target_link_libraries()` to the plain signature.
 - CMake reported `XMPP backend: enabled (PkgConfig::PC_STROPHE)` on Linux and macOS.
 - XMPP login succeeded; outgoing direct messages were sendable.
-- Incoming direct messages did not appear before the libstrophe handler return-type fix.
+- Incoming direct messages did not appear before the XMPP receive fixes.
 
 Not verified yet:
 
-- The libstrophe handler return-type fix for receiving messages.
-- Saved password, restored password and automatic connect on selecting the XMPP backend.
+- The XMPP receive fixes: stanza handlers registered on connect, bare/case-insensitive JID matching, larger event queue and full chat refresh.
+- `account.json` persistence for multiple marked accounts, migration from older XMPP state credentials, checkbox-controlled automatic connect, the XMPP connection test button, and double-click account switching from the Manage accounts table.
 - macOS rebuild with the updated `src/CMakeLists.txt`.
 - Manual UI checks on macOS and Windows.
 - Full GitHub Actions release uploads.
@@ -59,7 +59,7 @@ Not verified yet:
 ```text
 src/main.c       osmain_sync entry point
 src/gui.c        NAppGUI windows, buddy list, conversations, dialogs, menus
-src/backend.c    messenger model, mock/local backend and state files
+src/backend.c    messenger model and state files
 src/backend.h    only interface the GUI is allowed to use
 src/xmpp.c       optional libstrophe worker thread and event queue
 src/xmpp.h       private interface between backend.c and the XMPP backend
@@ -83,15 +83,15 @@ Rules:
 
 3. Add local persistence. Done.
    - Account name, own status, buddies and recent messages are saved as text.
-   - State files: `state.txt` for local and `state-xmpp.txt` for XMPP under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows. The XMPP password is stored there in plain text with user-only permissions on Unix.
+   - `account.json` under `~/.config/calantas` on Linux/macOS or `%APPDATA%\Calantas` on Windows holds a list of XMPP accounts with marker, JID, password, server and auto-connect flag. Each marker has its own state file: `state-xmpp.txt` for `XMPP`, otherwise `state-xmpp-MARKER.txt`, holding status, buddies and recent messages. The password is plain text with user-only permissions on Unix.
 
 4. Add XMPP core with libstrophe. Implemented, not verified by the user yet.
-   - JID/password account in the Account dialog.
+   - Marked JID/password accounts in the Manage accounts dialog, with one **Manage account** menu entry and account switching by double-clicking a table row.
    - TLS/SASL login through libstrophe.
    - Roster, presence and own status.
    - Direct messages.
    - Worker thread plus event queue.
-   - Optional build: the app builds without libstrophe and disables the XMPP menu item.
+   - Optional build: the app builds without libstrophe but cannot connect.
 
 5. Add IRC.
    - Server/nick/channel account model.
@@ -148,7 +148,7 @@ Binary:
 build/Release/bin/calantas
 ```
 
-CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix. Setup scripts clone the NAppGUI source into `~/.cache/calantas/nappgui_src` so the repository stays clean. The XMPP backend is enabled only when libstrophe is found; use `-DCALANTAS_ENABLE_XMPP=OFF` to force a local-only build.
+CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C:/nappgui/cmake` on Windows. Set `NAPPGUI_DIR` to override the SDK prefix. Setup scripts clone the NAppGUI source into `~/.cache/calantas/nappgui_src` so the repository stays clean. The XMPP backend is enabled only when libstrophe is found; use `-DCALANTAS_ENABLE_XMPP=OFF` to disable XMPP detection. The app will build but cannot connect.
 
 ## Workflow files
 
@@ -173,15 +173,16 @@ CMake defaults `nappgui_DIR` to `/usr/local/nappgui/cmake` on Linux/macOS and `C
 
 Where we stopped:
 
-- All edits are saved in `/home/veto/webs/berg/calantas`. Nothing was committed; the user handles git.
+- All edits are saved in `/home/veto/webs/github/calantas`. Nothing was committed; the user handles git.
 - The last user-tested Linux build had XMPP enabled and connected successfully. Outgoing direct messages worked; incoming messages did not appear.
 - Cause found: libstrophe `xmpp_handler` callbacks must return `int` and return nonzero to stay registered. The message, presence and IQ handlers were `void`. They were changed to `int` and now return `1`.
-- The user then asked to save passwords. Password persistence was added:
-  - `Backend` stores `password[128]`.
-  - State file writes and restores `P|...`.
-  - `cal_backend_account_password()` was added to `backend.h`.
-  - The Account dialog prefills the saved XMPP password.
-  - Selecting the XMPP backend auto-connects when a saved JID and password exist.
+- The user then asked to save passwords permanently. Account persistence was added:
+  - `account.json` stores a list of accounts with `name` (marker), `jid`, `password`, `server` and `auto_connect` with user-only permissions on Unix.
+  - Older `state-xmpp.txt` `J|`, `R|`, `P|` and `C|` values are migrated into `account.json` on first run.
+  - `cal_backend_accounts()`, `cal_backend_account_get()`, `cal_backend_account_save()` and `cal_backend_select_account()` expose the account list to the GUI.
+  - The XMPP account dialog prefills from the selected account in `account.json`, so the password is not requested again.
+  - The Manage accounts dialog lists saved accounts in a table; the active marker is prefixed with `*`. Double-clicking a row switches rosters and connects.
+  - Startup auto-connect only when the checkbox is checked and a saved JID/password exist.
   - Password is plain text with `0600` permissions on Unix; no keyring/encryption.
 - The CMake mix of keyword and plain `target_link_libraries()` was fixed by using NAppGUI's plain signature:
   ```cmake
@@ -196,7 +197,7 @@ Next steps when returning:
    ```text
    XMPP backend: enabled (PkgConfig::PC_STROPHE)
    ```
-2. Select **Accounts → Use XMPP Backend**. With the saved JID/password it should auto-connect and show `Connecting to XMPP`, then `XMPP connected`.
+2. With **Connect automatically on startup (XMPP)** checked in the XMPP account dialog, restart the app. It should connect with the active saved JID/password and show `Connecting to XMPP`, then `XMPP connected`. Save a second account with a different marker from **Accounts → Manage account** and double-click rows to switch between them to verify separate rosters.
 3. Open the conversation window for the test buddy. Send from the other XMPP client and verify Calantas shows the incoming message and status line.
 4. Verify roster and presence again after the handler fix.
 5. On macOS, copy these updated files from Linux before rebuilding:
@@ -217,5 +218,5 @@ Next steps when returning:
    - confirm the other client sends to the Calantas JID and roster subscription is accepted both ways;
    - confirm the status line changes to `Message received`;
    - add a temporary libstrophe logger to `xmpp.c` if needed;
-   - check `~/.config/calantas/state-xmpp.txt` for `J|`, `P|`, `R|` and buddy records.
+   - check `~/.config/calantas/account.json` for the account list with `name`, `jid`, `password`, `server` and `auto_connect`, and `state-xmpp.txt` / `state-xmpp-MARKER.txt` for buddy records.
 7. After successful tests, update the "Verified by the user" and "Not verified yet" lists near the top of this file.
