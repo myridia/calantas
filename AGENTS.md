@@ -23,14 +23,14 @@ The user builds and runs:
 ## Structure
 - `src/main.c` — `osmain_sync` entry point and 0.25s ticker
 - `src/gui.c` / `src/gui.h` — buddy list, conversation windows, menus and dialogs
-- `src/backend.c` / `src/backend.h` — account/buddy/message model, mock/local backend and text state persistence
+- `src/backend.c` / `src/backend.h` — account/buddy/message model and text state persistence
 - `src/xmpp.c` / `src/xmpp.h` — optional libstrophe backend with worker thread and event queue
 - `src/res/` — icons
 - `CMakeLists.txt` — NAppGUI package lookup and project setup
 - `src/CMakeLists.txt` — `nap_desktop_app`
 - `ask.sh` / `ask.d/` — install/build/run/clean tasks with built-in fallbacks when `ask.d/` is missing; task 6 cleans `build/` and `dist/`; task 7 installs XMPP libraries; task 8 installs NAppGUI plus all XMPP, Telegram and ActivityPub dependencies
 - `build.sh` / `run.sh` — direct build and launch, including macOS `.app` bundles
-- `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution and Linux, macOS and Windows jobs
+- `.github/workflows/control.yml` — single CI entry point with mcclim-style tag resolution and Linux, macOS and Windows jobs; runs for repository owners `myridia` and `veto8`
 - `.github/workflows/linux.yml` — Linux build and release with optional `tag`
 - `.github/workflows/mac.yml` — macOS ARM build and DMG release with optional `tag`
 - `.github/workflows/windows.yml` — Windows build and release with optional `tag`
@@ -39,9 +39,8 @@ The user builds and runs:
 
 ## Architecture
 - The GUI depends only on `backend.h`.
-- The mock backend supplies buddies, presence, sent messages and local replies.
-- The optional XMPP backend uses libstrophe on a worker thread; it handles TLS/SASL login, roster, presence and direct messages, and pushes events to the GUI thread.
-- `cal_backend_store()` / `cal_backend_restore()` keep account name, status, JID, password, server, buddies and recent messages in `state.txt` for local and `state-xmpp.txt` for XMPP under the user config directory. Passwords are stored in plain text with user-only permissions on Unix.
+- The XMPP backend uses libstrophe on a worker thread; it handles TLS/SASL login, roster, presence and direct messages, and pushes events to the GUI thread.
+- `account.json` keeps a list of XMPP accounts with marker, JID, password, server and auto-connect flag. `cal_backend_store()` / `cal_backend_restore()` keep status, buddies and recent messages in `state-xmpp.txt` for the `XMPP` marker or `state-xmpp-MARKER.txt` for other markers under the user config directory. The password is stored in plain text with user-only permissions on Unix.
 - `calantas_update()` polls backend events on the NAppGUI ticker.
 - Conversation windows are one per buddy, created on demand; they track the buddy handle so roster reordering does not retarget them.
 - Planned backends: IRC, Telegram with TDLib, ActivityPub via Mastodon API, then raw ActivityPub.
