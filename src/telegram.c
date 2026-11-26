@@ -5,9 +5,28 @@
 #include <osbs/osbsall.h>
 #include <sewer/bstd.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#if defined(_WIN32)
+#include <direct.h>
+#include <io.h>
+#include <stdint.h>
+#include <sys/stat.h>
+#define CAL_CREATE_DIR(path) _mkdir(path)
+#define CAL_REMOVE_DIR(path) _rmdir(path)
+#define CAL_PATH_SEP "\\"
+#define CAL_PATH_SEP_CH '\\'
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#define CAL_CREATE_DIR(path) mkdir(path, 0700)
+#define CAL_REMOVE_DIR(path) rmdir(path)
+#define CAL_PATH_SEP "/"
+#define CAL_PATH_SEP_CH '/'
+#endif
 
 #if CALANTAS_HAVE_TELEGRAM
 
@@ -36,7 +55,7 @@ struct _telegram_backend_t
     char_t status_text[128];
     cal_status_t status;
 #if CALANTAS_HAVE_TELEGRAM
-    char_t database[96];
+    char_t database[512];
     Thread *thread;
     struct TdJson *client;
     bool_t running;
@@ -315,15 +334,221 @@ static uint32_t i_hash_text(const char_t *text, uint32_t hash)
     return hash;
 }
 
+static bool_t i_path_exists(const char_t *path)
+{
+#if defined(_WIN32)
+    struct _stat info;
+    return path != NULL && _stat(path, &info) == 0 ? TRUE : FALSE;
+#else
+    struct stat info;
+    return path != NULL && stat(path, &info) == 0 ? TRUE : FALSE;
+#endif
+}
+
+static void i_join_path(char_t *out, const uint32_t size, const char_t *base, const char_t *name)
+{
+    bstd_sprintf(out, size, "%s%s%s", base, CAL_PATH_SEP, name);
+}
+
+static bool_t i_copy_file(const char_t *src, const char_t *dst)
+{
+    char_t buffer[8192];
+    FILE *input;
+    FILE *output;
+    size_t count;
+    bool_t ok = TRUE;
+
+    input = fopen(src, "rb");
+    if (input == NULL)
+        return FALSE;
+    output = fopen(dst, "wb");
+    if (output == NULL)
+    {
+        fclose(input);
+        return FALSE;
+    }
+    while ((count = fread(buffer, 1, sizeof(buffer), input)) > 0)
+    {
+        if (fwrite(buffer, 1, count, output) != count)
+        {
+            ok = FALSE;
+            break;
+        }
+    }
+    fclose(input);
+    fclose(output);
+    return ok;
+}
+
+static bool_t i_copy_tree(const char_t *src, const char_t *dst)
+{
+    char_t child_src[512];
+    char_t child_dst[512];
+
+    if (rename(src, dst) == 0)
+        return TRUE;
+
+#if defined(_WIN32)
+    struct _finddata_t info;
+    intptr_t handle;
+    char_t pattern[600];
+
+    bstd_sprintf(pattern, sizeof(pattern), "%s%s*", src, CAL_PATH_SEP);
+    handle = _findfirst(pattern, &info);
+    if (handle == -1)
+        return FALSE;
+    CAL_CREATE_DIR(dst);
+    do
+    {
+        if (strcmp(info.name, ".") == 0 || strcmp(info.name, "..") == 0)
+            continue;
+        i_join_path(child_src, sizeof(child_src), src, info.name);
+        i_join_path(child_dst, sizeof(child_dst), dst, info.name);
+        if ((info.attrib & _A_SUBDIR) != 0)
+            i_copy_tree(child_src, child_dst);
+        else
+            i_copy_file(child_src, child_dst);
+    } while (_findnext(handle, &info) == 0);
+    _findclose(handle);
+#else
+    DIR *dir;
+    struct dirent *entry;
+
+    dir = opendir(src);
+    if (dir == NULL)
+        return FALSE;
+    CAL_CREATE_DIR(dst);
+    while ((entry = readdir(dir)) != NULL)
+    {
+        struct stat info;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        i_join_path(child_src, sizeof(child_src), src, entry->d_name);
+        i_join_path(child_dst, sizeof(child_dst), dst, entry->d_name);
+        if (stat(child_src, &info) == 0 && S_ISDIR(info.st_mode) != 0)
+            i_copy_tree(child_src, child_dst);
+        else
+            i_copy_file(child_src, child_dst);
+    }
+    closedir(dir);
+#endif
+
+    return TRUE;
+}
+
+static void i_remove_tree(const char_t *path)
+{
+    char_t child[512];
+
+#if defined(_WIN32)
+    struct _finddata_t info;
+    intptr_t handle;
+    char_t pattern[600];
+
+    bstd_sprintf(pattern, sizeof(pattern), "%s%s*", path, CAL_PATH_SEP);
+    handle = _findfirst(pattern, &info);
+    if (handle != -1)
+    {
+        do
+        {
+            if (strcmp(info.name, ".") == 0 || strcmp(info.name, "..") == 0)
+                continue;
+            i_join_path(child, sizeof(child), path, info.name);
+            if ((info.attrib & _A_SUBDIR) != 0)
+                i_remove_tree(child);
+            else
+                remove(child);
+        } while (_findnext(handle, &info) == 0);
+        _findclose(handle);
+    }
+#else
+    DIR *dir;
+    struct dirent *entry;
+
+    dir = opendir(path);
+    if (dir != NULL)
+    {
+        while ((entry = readdir(dir)) != NULL)
+        {
+            struct stat info;
+
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            i_join_path(child, sizeof(child), path, entry->d_name);
+            if (stat(child, &info) == 0 && S_ISDIR(info.st_mode) != 0)
+                i_remove_tree(child);
+            else
+                remove(child);
+        }
+        closedir(dir);
+    }
+#endif
+
+    CAL_REMOVE_DIR(path);
+}
+
+static void i_move_tree(const char_t *src, const char_t *dst)
+{
+    if (i_copy_tree(src, dst) == TRUE && i_path_exists(src) == TRUE)
+        i_remove_tree(src);
+}
+
+static void i_migrate_database(const char_t *target)
+{
+    const char_t *leaf;
+    char_t legacy[512];
+
+    if (target == NULL || i_path_exists(target) == TRUE)
+        return;
+    leaf = strrchr(target, CAL_PATH_SEP_CH);
+    leaf = leaf != NULL ? leaf + 1 : target;
+    bstd_sprintf(legacy, sizeof(legacy), "%s", leaf);
+    if (strcmp(legacy, target) != 0 && i_path_exists(legacy) == TRUE)
+        i_move_tree(legacy, target);
+    bstd_sprintf(legacy, sizeof(legacy), "%s", "calantas-telegram");
+    if (strcmp(legacy, target) != 0 && i_path_exists(legacy) == TRUE)
+        i_move_tree(legacy, target);
+}
+
 static void i_test_database(char_t *out, const uint32_t size, const char_t *identity,
                             const char_t *api_id, const char_t *api_hash)
 {
+    char_t parent[512];
+    char_t base[512];
+    char_t name[128];
     uint32_t hash = 2166136261u;
+    const char_t *root;
+
+#if defined(_WIN32)
+    root = getenv("APPDATA");
+    if (root == NULL || root[0] == '\0')
+        root = getenv("USERPROFILE");
+    if (root == NULL || root[0] == '\0')
+        root = ".";
+    bstd_sprintf(parent, sizeof(parent), "%s\\Calantas", root);
+#else
+    root = getenv("HOME");
+    if (root == NULL || root[0] == '\0')
+        root = ".";
+    bstd_sprintf(parent, sizeof(parent), "%s/.config", root);
+#endif
+
+    CAL_CREATE_DIR(parent);
+    bstd_sprintf(base, sizeof(base), "%s%s%s", parent, CAL_PATH_SEP,
+#if defined(_WIN32)
+                 "tdlib");
+#else
+                 "calantas");
+#endif
+    CAL_CREATE_DIR(base);
 
     hash = i_hash_text(identity, hash);
     hash = i_hash_text(api_id, hash);
     hash = i_hash_text(api_hash, hash);
-    bstd_sprintf(out, size, "calantas-telegram-test-%08x", (unsigned int)hash);
+    bstd_sprintf(name, sizeof(name), "calantas-telegram-test-%08x", (unsigned int)hash);
+    bstd_sprintf(out, size, "%s%s%s", base, CAL_PATH_SEP, name);
+    i_migrate_database(out);
 }
 
 static void i_secret_part(const char_t *secret, const bool_t first, char_t *out,
@@ -880,7 +1105,7 @@ bool_t cal_telegram_connect(TelegramBackend *backend, const char_t *identity,
         return FALSE;
 
 #if CALANTAS_HAVE_TELEGRAM
-    char_t database[96];
+    char_t database[512];
 
     i_stop_thread(backend);
     i_test_database(database, sizeof(database), identity, api_id, api_hash);
@@ -926,7 +1151,7 @@ bool_t cal_telegram_test_connection_logged(const char_t *identity, const char_t 
 #if CALANTAS_HAVE_TELEGRAM
     struct TdJson *client;
     TgTestState state;
-    char_t database[96];
+    char_t database[512];
     char_t line[192];
     bool_t success = FALSE;
 
