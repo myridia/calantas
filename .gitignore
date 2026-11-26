@@ -9,6 +9,8 @@ dist/
 *.elf
 nappgui_src/
 telegram-app.json
+calantas-telegram/
+calantas-telegram-test-*/
 
 # Linker output
 *.ilk
