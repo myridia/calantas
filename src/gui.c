@@ -28,6 +28,7 @@ struct _chat_t
     Edit *input;
     uint32_t index;
     uint32_t rendered;
+    uint32_t emotion;
     char_t handle[128];
 };
 
@@ -337,6 +338,23 @@ static void i_refresh_chat(Chat *chat)
     textview_scroll_caret(chat->text);
 }
 
+static void i_OnChatEmotion(Chat *chat, Event *e)
+{
+    static const char_t *emotions[] = {
+        "🙂", "😀", "😄", "😊", "😉", "😍", "😂", "😎", "😢", "😡", "👍", "❤️"
+    };
+    const uint32_t count = (uint32_t)(sizeof(emotions) / sizeof(emotions[0]));
+    const char_t *current = edit_get_text(chat->input);
+    char_t text[2048];
+
+    bstd_sprintf(text, sizeof(text), "%s%s%s", current != NULL ? current : "",
+                 current != NULL && current[0] != '\0' ? " " : "", emotions[chat->emotion % count]);
+    edit_text(chat->input, text);
+    chat->emotion = (chat->emotion + 1) % count;
+    window_focus(chat->window, guicontrol(chat->input));
+    unref(e);
+}
+
 static void i_OnChatSend(Chat *chat, Event *e)
 {
     const char_t *text = edit_get_text(chat->input);
@@ -378,7 +396,9 @@ static void i_open_chat(App *app, const uint32_t index)
     Chat *chat;
     Panel *panel;
     Layout *layout;
+    Layout *toolbar;
     Layout *bottom;
+    Button *emotion;
     Button *send;
     char_t title[160];
     const CalBuddy *buddy = cal_backend_buddy(app->backend, index);
@@ -399,7 +419,8 @@ static void i_open_chat(App *app, const uint32_t index)
     bstd_sprintf(chat->handle, sizeof(chat->handle), "%s", buddy->handle);
     chat->window = window_create(ekWINDOW_STDRES);
     chat->text = textview_create();
-    chat->input = edit_create();
+    chat->input = edit_multiline();
+    emotion = button_push();
     send = button_push();
 
     bstd_sprintf(title, sizeof(title), "Conversation with %s", buddy->name);
@@ -407,29 +428,40 @@ static void i_open_chat(App *app, const uint32_t index)
     window_origin(chat->window, v2df(260, 180));
     window_OnClose(chat->window, listener(chat, i_OnChatClose, Chat));
 
-    textview_size(chat->text, s2df(520, 320));
-    edit_width(chat->input, 380);
+    textview_size(chat->text, s2df(760, 420));
+    edit_height(chat->input, 110);
     edit_phtext(chat->input, "Type a message");
+    button_text(emotion, "🙂 Emotions");
+    button_width(emotion, 130);
+    button_OnClick(emotion, listener(chat, i_OnChatEmotion, Chat));
     button_text(send, "Send");
     button_width(send, 80);
     button_OnClick(send, listener(chat, i_OnChatSend, Chat));
 
-    layout = layout_create(1, 2);
+    layout = layout_create(1, 3);
+    toolbar = layout_create(1, 1);
     bottom = layout_create(2, 1);
     layout_textview(layout, chat->text, 0, 0);
-    layout_layout(layout, bottom, 0, 1);
+    layout_layout(layout, toolbar, 0, 1);
+    layout_layout(layout, bottom, 0, 2);
+    layout_button(toolbar, emotion, 0, 0);
+    layout_halign(toolbar, 0, 0, ekLEFT);
+    layout_hexpand(toolbar, 0);
     layout_edit(bottom, chat->input, 0, 0);
     layout_button(bottom, send, 1, 0);
     layout_hexpand(bottom, 0);
+    layout_valign(bottom, 0, 0, ekTOP);
+    layout_valign(bottom, 1, 0, ekTOP);
     layout_hmargin(bottom, 0, 6);
+    layout_hexpand(layout, 0);
     layout_vexpand(layout, 0);
-    layout_margin(layout, 10);
+    layout_margin(layout, 12);
 
     panel = panel_create();
     panel_layout(panel, layout);
     window_panel(chat->window, panel);
     window_defbutton(chat->window, send);
-    window_client_size(chat->window, s2df(560, 420));
+    window_client_size(chat->window, s2df(880, 620));
 
     app->chats[index] = chat;
     i_refresh_chat(chat);

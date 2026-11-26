@@ -167,7 +167,11 @@ static uint32_t i_find_buddy(const Backend *backend, const char_t *handle)
 static uint32_t i_contact(Backend *backend, const char_t *name, const char_t *jid,
                           const cal_status_t status, const char_t *status_text)
 {
-    uint32_t index = i_find_buddy(backend, jid);
+    uint32_t index;
+
+    if (jid == NULL || jid[0] == '\0')
+        return CALANTAS_MAX_BUDDIES;
+    index = i_find_buddy(backend, jid);
 
     if (index == CALANTAS_MAX_BUDDIES)
     {
@@ -755,14 +759,13 @@ static bool_t i_save_account_store(const AccountStore *store)
     return TRUE;
 }
 
-static bool_t i_read_legacy_account(CalAccount *account)
+static bool_t i_read_account_file(const char_t *path, CalAccount *account)
 {
-    char_t path[1200];
     char_t line[CAL_LINE_MAX];
     char_t fields[8][CAL_FIELD_MAX];
     FILE *file;
 
-    if (account == NULL || i_config_path(path, sizeof(path)) == FALSE)
+    if (path == NULL || account == NULL)
         return FALSE;
     file = fopen(path, "rb");
     if (file == NULL)
@@ -791,6 +794,24 @@ static bool_t i_read_legacy_account(CalAccount *account)
     }
     fclose(file);
     return account->jid[0] != '\0' || account->password[0] != '\0';
+}
+
+static bool_t i_read_legacy_account(CalAccount *account)
+{
+    char_t path[1200];
+
+    if (account == NULL || i_config_path(path, sizeof(path)) == FALSE)
+        return FALSE;
+    return i_read_account_file(path, account);
+}
+
+static bool_t i_read_marker_account(const char_t *marker, CalAccount *account)
+{
+    char_t path[1200];
+
+    if (marker == NULL || marker[0] == '\0' || i_state_path(path, sizeof(path), marker) == FALSE)
+        return FALSE;
+    return i_read_account_file(path, account);
 }
 
 static void i_push_account(AccountStore *store, CalAccount *current, bool_t *have_current,
@@ -925,7 +946,8 @@ static bool_t i_load_account_store(AccountStore *store)
     {
         CalAccount legacy;
 
-        if (i_read_legacy_account(&legacy) == TRUE)
+        if (i_read_marker_account(store->active, &legacy) == TRUE
+            || i_read_legacy_account(&legacy) == TRUE)
         {
             store->accounts[0] = legacy;
             store->count = 1;
@@ -992,17 +1014,30 @@ static bool_t i_save_active_account(const Backend *backend)
         return FALSE;
 
     memset(&account, 0, sizeof(account));
-    bstd_sprintf(account.jid, sizeof(account.jid), "%s", backend->jid);
-    bstd_sprintf(account.password, sizeof(account.password), "%s", backend->password);
-    bstd_sprintf(account.server, sizeof(account.server), "%s", backend->server);
     bstd_sprintf(account.name, sizeof(account.name), "%s", backend->account_marker);
     if (account.name[0] == '\0')
         i_account_default_name(&account, account.name, sizeof(account.name));
-    account.auto_connect = backend->auto_connect;
 
     index = i_find_account(&store, store.active);
     if (index == CALANTAS_MAX_ACCOUNTS)
         index = i_find_account(&store, account.name);
+
+    bstd_sprintf(account.jid, sizeof(account.jid), "%s", backend->jid);
+    bstd_sprintf(account.password, sizeof(account.password), "%s", backend->password);
+    bstd_sprintf(account.server, sizeof(account.server), "%s", backend->server);
+    if (index != CALANTAS_MAX_ACCOUNTS)
+    {
+        const CalAccount *saved = &store.accounts[index];
+
+        if (account.jid[0] == '\0')
+            bstd_sprintf(account.jid, sizeof(account.jid), "%s", saved->jid);
+        if (account.password[0] == '\0')
+            bstd_sprintf(account.password, sizeof(account.password), "%s", saved->password);
+        if (account.server[0] == '\0')
+            bstd_sprintf(account.server, sizeof(account.server), "%s", saved->server);
+    }
+    account.auto_connect = backend->auto_connect;
+
     if (index == CALANTAS_MAX_ACCOUNTS && store.count < CALANTAS_MAX_ACCOUNTS)
     {
         store.accounts[store.count] = account;
@@ -1082,7 +1117,8 @@ bool_t cal_backend_xmpp_available(void)
 
 bool_t cal_backend_connect(Backend *backend, const char_t *jid, const char_t *password, const char_t *server)
 {
-    if (backend == NULL || jid == NULL || jid[0] == '\0')
+    if (backend == NULL || jid == NULL || jid[0] == '\0'
+        || password == NULL || password[0] == '\0')
         return FALSE;
 
     bstd_sprintf(backend->jid, sizeof(backend->jid), "%s", jid);
@@ -1452,6 +1488,11 @@ bool_t cal_backend_store(const Backend *backend)
     if (file == NULL)
         return FALSE;
 
+    i_write_string(file, "K|", backend->account_marker);
+    i_write_string(file, "J|", backend->jid);
+    i_write_string(file, "P|", backend->password);
+    i_write_string(file, "R|", backend->server);
+    fprintf(file, "C|%u|\n", backend->auto_connect == TRUE ? 1u : 0u);
     i_write_string(file, "A|", backend->account_name);
     fprintf(file, "S|%u|", (unsigned)backend->status);
     i_write_escaped(file, backend->status_text);
@@ -1526,7 +1567,7 @@ bool_t cal_backend_restore(Backend *backend)
         }
         else if (strcmp(fields[0], "N") == 0 && nfields >= 3)
         {
-            backend->count = i_parse_u32(fields[1], CAL_MAX_BUDDIES);
+            backend->count = 0;
         }
         else if (strcmp(fields[0], "B") == 0 && nfields >= 7)
         {
@@ -1534,9 +1575,12 @@ bool_t cal_backend_restore(Backend *backend)
 
             if (backend->count >= CAL_MAX_BUDDIES)
                 continue;
+            if (fields[2][0] == '\0')
+                continue;
             buddy = &backend->buddies[backend->count];
-            i_init_buddy(buddy, fields[1], fields[2], i_parse_status(fields[3]), fields[4]);
-            buddy->message_count = i_parse_u32(fields[5], CALANTAS_MAX_MESSAGES);
+            i_init_buddy(buddy, fields[1][0] != '\0' ? fields[1] : fields[2],
+                         fields[2], i_parse_status(fields[3]), fields[4]);
+            buddy->message_count = 0;
             backend->count += 1;
         }
         else if (strcmp(fields[0], "M") == 0 && nfields >= 6)
@@ -1545,6 +1589,8 @@ bool_t cal_backend_restore(Backend *backend)
             CalMessage *message;
 
             if (backend->count == 0)
+                continue;
+            if (fields[2][0] == '\0' || fields[4][0] == '\0')
                 continue;
             buddy = &backend->buddies[backend->count - 1];
             if (buddy->message_count >= CALANTAS_MAX_MESSAGES)
